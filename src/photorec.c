@@ -862,8 +862,15 @@ pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params,
     }
   }
 
-  if(file_recovery->handle)
-    file_finish_aux(file_recovery, params, options, (options->paranoid==0?0:1));
+  if(file_recovery->handle) {
+    // For combined filters (image + filesize), skip paranoid file_check to avoid re-reading from disk
+    // The file was already validated in memory by file_check_presave
+    const int skip_paranoid = (file_recovery->image_filter &&
+                                file_recovery->file_size_filter &&
+                                (file_recovery->file_size_filter->min_file_size > 0 ||
+                                 file_recovery->file_size_filter->max_file_size > 0));
+    file_finish_aux(file_recovery, params, options, (skip_paranoid ? 0 : (options->paranoid==0?0:1)));
+  }
   if(file_recovery->file_size==0)
   {
     file_block_truncate_zero(file_recovery, list_search_space);

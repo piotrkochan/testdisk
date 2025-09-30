@@ -360,6 +360,9 @@ static int png_maches_image_filtering(const unsigned char *buffer, const unsigne
     const struct png_ihdr *ihdr = (const struct png_ihdr *)&check_buffer[16];
     const unsigned int width = be32(ihdr->width);
     const unsigned int height = be32(ihdr->height);
+    // Save dimensions to avoid re-reading from disk in file_check
+    file_recovery->image_data.width = width;
+    file_recovery->image_data.height = height;
     if(should_skip_image_by_dimensions(file_recovery->image_filter, width, height))
       return 0;
   }

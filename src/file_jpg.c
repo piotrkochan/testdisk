@@ -1978,6 +1978,9 @@ static int jpg_maches_image_filtering(const unsigned char *buffer, const unsigne
           const struct sof_header *sof = (const struct sof_header *)&check_buffer[i];
           const unsigned int width = be16(sof->width);
           const unsigned int height = be16(sof->height);
+          // Save dimensions to avoid re-reading from disk in file_check
+          file_recovery->image_data.width = width;
+          file_recovery->image_data.height = height;
           if(file_recovery->image_filter && should_skip_image_by_dimensions(file_recovery->image_filter, width, height))
             return 0;
         }

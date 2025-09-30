@@ -1217,7 +1217,7 @@ time_t get_time_from_YYYYMMDD_HHMMSS(const char *date_asc)
 }
 
 // Buffer pool for reusing memory buffers to avoid calloc/free overhead
-#define BUFFER_POOL_MAX_SIZE 100
+#define BUFFER_POOL_MAX_SIZE 200
 static struct {
   unsigned char *buffers[BUFFER_POOL_MAX_SIZE];
   uint64_t buffer_sizes[BUFFER_POOL_MAX_SIZE];
@@ -1270,9 +1270,14 @@ static uint64_t calculate_max_buffer_size(file_recovery_t *file_recovery)
     max_size = file_recovery->file_stat->file_hint->max_filesize;
   }
 
-  if(file_recovery->file_size_filter && file_recovery->file_size_filter->max_file_size > 0) {
-    if(max_size == 0 || file_recovery->file_size_filter->max_file_size < max_size) {
-      max_size = file_recovery->file_size_filter->max_file_size;
+  // For images with image_filter, don't use filesize_filter for buffer size
+  // Image filter uses its own size limits and overflow handling
+  if(!(file_recovery->image_filter && file_recovery->file_stat &&
+       file_recovery->file_stat->file_hint && file_recovery->file_stat->file_hint->is_image)) {
+    if(file_recovery->file_size_filter && file_recovery->file_size_filter->max_file_size > 0) {
+      if(max_size == 0 || file_recovery->file_size_filter->max_file_size < max_size) {
+        max_size = file_recovery->file_size_filter->max_file_size;
+      }
     }
   }
 

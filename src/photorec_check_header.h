@@ -138,10 +138,18 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
 
   // Enable memory buffering for:
   // 1. Images with image_filter active
-  // 2. ANY file when file_size_filter is active (to avoid disk I/O for rejected files)
-  if((file_recovery->image_filter && file_recovery->file_stat->file_hint->is_image) ||
-     (file_recovery->file_size_filter &&
-      (file_recovery->file_size_filter->min_file_size > 0 || file_recovery->file_size_filter->max_file_size > 0))) {
+  // 2. Files when max_file_size filter is active (to avoid disk I/O for rejected files)
+  //    BUT: if image_filter is already active, don't add filesize buffering on top
+  //    Note: min_file_size alone doesn't need buffering - file is written normally and rejected in file_finish2
+  if(file_recovery->image_filter && file_recovery->file_stat->file_hint->is_image) {
+    // Image filter - use memory buffering
+    file_recovery->use_memory_buffering = 1;
+    if(init_memory_buffer(file_recovery) < 0) {
+      file_recovery->use_memory_buffering = 0;
+    }
+  }
+  else if(file_recovery->file_size_filter && file_recovery->file_size_filter->max_file_size > 0) {
+    // Pure filesize max filter (no image filter) - use memory buffering
     file_recovery->use_memory_buffering = 1;
     if(init_memory_buffer(file_recovery) < 0) {
       file_recovery->use_memory_buffering = 0;
