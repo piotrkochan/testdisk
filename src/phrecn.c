@@ -499,43 +499,91 @@ int photorec(struct ph_param *params, const struct ph_options *options, alloc_da
 }
 
 #ifdef HAVE_NCURSES
-extern uint64_t parse_file_size(const char *size_str);
-
-static void format_filesize_display(uint64_t size, char *buffer, size_t buffer_size)
-{
-  if(size == 0)
-  {
-    snprintf(buffer, buffer_size, "Max file size : No limit");
-  }
-  else if(size % (1024ULL*1024ULL*1024ULL*1024ULL) == 0)
-    snprintf(buffer, buffer_size, "Max file size : %lluT", size / (1024ULL*1024ULL*1024ULL*1024ULL));
-  else if(size % (1024ULL*1024ULL*1024ULL) == 0)
-    snprintf(buffer, buffer_size, "Max file size : %lluG", size / (1024ULL*1024ULL*1024ULL));
-  else if(size % (1024ULL*1024ULL) == 0)
-    snprintf(buffer, buffer_size, "Max file size : %lluM", size / (1024ULL*1024ULL));
-  else if(size % 1024ULL == 0)
-    snprintf(buffer, buffer_size, "Max file size : %lluK", size / 1024ULL);
-  else
-    snprintf(buffer, buffer_size, "Max file size : %llu bytes", size);
-}
-
 static void format_filesize_input(uint64_t size, char *buffer, size_t buffer_size)
 {
   if(size == 0)
   {
     buffer[0] = '\0';
+    return;
   }
-  else if(size % (1024ULL*1024ULL*1024ULL*1024ULL) == 0)
-    snprintf(buffer, buffer_size, "%lluT", size / (1024ULL*1024ULL*1024ULL*1024ULL));
-  else if(size % (1024ULL*1024ULL*1024ULL) == 0)
-    snprintf(buffer, buffer_size, "%lluG", size / (1024ULL*1024ULL*1024ULL));
-  else if(size % (1024ULL*1024ULL) == 0)
-    snprintf(buffer, buffer_size, "%lluM", size / (1024ULL*1024ULL));
-  else if(size % 1024ULL == 0)
-    snprintf(buffer, buffer_size, "%lluK", size / 1024ULL);
+
+  if(size >= 1024ULL*1024ULL*1024ULL*1024ULL)
+  {
+    double tb = (double)size / (1024ULL*1024ULL*1024ULL*1024ULL);
+    snprintf(buffer, buffer_size, "%.2ft", tb);
+  }
+  else if(size >= 1024*1024*1024)
+  {
+    double gb = (double)size / (1024*1024*1024);
+    snprintf(buffer, buffer_size, "%.2fg", gb);
+  }
+  else if(size >= 1024*1024)
+  {
+    double mb = (double)size / (1024*1024);
+    snprintf(buffer, buffer_size, "%.2fm", mb);
+  }
+  else if(size >= 1024)
+  {
+    double kb = (double)size / 1024.0;
+    snprintf(buffer, buffer_size, "%.2fk", kb);
+  }
   else
-    snprintf(buffer, buffer_size, "%llu", size);
+  {
+    snprintf(buffer, buffer_size, "%lu", (unsigned long)size);
+  }
 }
+
+/* Simple input function with ESC support - returns -1 on ESC, 0+ for string length */
+static int get_string_with_esc(WINDOW *window, char *str, int max_len)
+{
+  int ch;
+  int pos = 0;
+  int y, x;
+
+  str[0] = '\0';
+  getyx(window, y, x);
+
+  curs_set(1);
+
+  while(1)
+  {
+    ch = wgetch(window);
+
+    if(ch == key_ESC)
+    {
+      curs_set(0);
+      return -1; /* ESC pressed - cancel */
+    }
+    else if(ch == '\n' || ch == '\r')
+    {
+      break; /* Enter pressed - accept */
+    }
+    else if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
+    {
+      if(pos > 0)
+      {
+        pos--;
+        str[pos] = '\0';
+        wmove(window, y, x + pos);
+        waddch(window, ' ');
+        wmove(window, y, x + pos);
+      }
+    }
+    else if(ch >= 32 && ch <= 126 && pos < max_len - 1)
+    {
+      str[pos] = ch;
+      pos++;
+      str[pos] = '\0';
+      waddch(window, ch);
+    }
+    wrefresh(window);
+  }
+
+  curs_set(0);
+  return pos;
+}
+
+static void interface_filesize_photorec_ncurses(struct ph_options *options);
 
 void interface_options_photorec_ncurses(struct ph_options *options)
 {
@@ -572,9 +620,19 @@ void interface_options_photorec_ncurses(struct ph_options *options)
     menuOptions[3].name=options->expert?"Expert mode : Yes":"Expert mode : No";
     menuOptions[4].name=options->lowmem?"Low memory: Yes":"Low memory: No";
     {
-      static char max_filesize_str[64];
-      format_filesize_display(options->max_filesize, max_filesize_str, sizeof(max_filesize_str));
-      menuOptions[5].name=max_filesize_str;
+      static char filesize_str[128];
+      if(options->file_size_filter.min_file_size > 0 || options->file_size_filter.max_file_size > 0)
+      {
+        char min_str[32], max_str[32];
+        format_filesize_input(options->file_size_filter.min_file_size, min_str, sizeof(min_str));
+        format_filesize_input(options->file_size_filter.max_file_size, max_str, sizeof(max_str));
+        snprintf(filesize_str, sizeof(filesize_str), "File size : %s-%s",
+          strlen(min_str) > 0 ? min_str : "",
+          strlen(max_str) > 0 ? max_str : "");
+      }
+      else
+        snprintf(filesize_str, sizeof(filesize_str), "File size : No limit");
+      menuOptions[5].name=filesize_str;
     }
     aff_copy(stdscr);
     car=wmenuSelect_ext(stdscr, 23, INTER_OPTION_Y, INTER_OPTION_X, menuOptions, 0, "PKEMLQ", MENU_VERT|MENU_VERT_ARROW2VALID, &menu,&real_key);
@@ -605,32 +663,7 @@ void interface_options_photorec_ncurses(struct ph_options *options)
 	break;
       case 'm':
       case 'M':
-	{
-	  char response[64];
-	  char current_value[32];
-	  format_filesize_input(options->max_filesize, current_value, sizeof(current_value));
-	  mvwaddstr(stdscr, INTER_OPTION_Y+6, INTER_OPTION_X, "Enter max file size (e.g. 500M, 2G) or empty for no limit: ");
-	  if(get_string(stdscr, response, sizeof(response), current_value) > 0)
-	  {
-	    if(strlen(response) == 0)
-	    {
-	      options->max_filesize = 0;
-	    }
-	    else
-	    {
-	      uint64_t new_size = parse_file_size(response);
-	      if(new_size > 0)
-	      {
-		options->max_filesize = new_size;
-	      }
-	      else
-	      {
-		mvwaddstr(stdscr, INTER_OPTION_Y+7, INTER_OPTION_X, "Invalid size format! Press any key...");
-		wgetch(stdscr);
-	      }
-	    }
-	  }
-	}
+	interface_filesize_photorec_ncurses(options);
 	break;
       case key_ESC:
       case 'q':
@@ -788,6 +821,149 @@ void interface_file_select_ncurses(file_enable_t *files_enable)
       offset=current_element_num;
     if(current_element_num>=offset+INTER_FSELECT)
       offset=current_element_num-INTER_FSELECT+1;
+  }
+}
+
+static void interface_filesize_photorec_ncurses(struct ph_options *options)
+{
+  unsigned int menu = 0;
+  struct MenuItem menuOptions[]=
+  {
+    { '1', NULL, "Minimum file size" },
+    { '2', NULL, "Maximum file size" },
+    { 'Q', "Quit", "Return to previous menu" },
+    { 0, NULL, NULL }
+  };
+
+  while(1)
+  {
+    int car;
+    int real_key;
+    static char min_str[128];
+    static char max_str[128];
+    char min_val[32], max_val[32];
+
+    format_filesize_input(options->file_size_filter.min_file_size, min_val, sizeof(min_val));
+    format_filesize_input(options->file_size_filter.max_file_size, max_val, sizeof(max_val));
+
+    snprintf(min_str, sizeof(min_str), "Minimum file size : [ %s ]",
+      strlen(min_val) > 0 ? min_val : "no limit");
+    snprintf(max_str, sizeof(max_str), "Maximum file size : [ %s ]",
+      strlen(max_val) > 0 ? max_val : "no limit");
+
+    menuOptions[0].name = min_str;
+    menuOptions[1].name = max_str;
+
+    aff_copy(stdscr);
+    wmove(stdscr, 4, 0);
+    wprintw(stdscr, "File size filters (applies to all file types)\n");
+    wprintw(stdscr, "Examples: 10k, 500M, 2G\n\n");
+
+    car=wmenuSelect_ext(stdscr, 23, INTER_OPTION_Y+2, INTER_OPTION_X, menuOptions, 0, "12Q", MENU_VERT|MENU_VERT_ARROW2VALID, &menu, &real_key);
+
+    switch(car)
+    {
+      case '1':
+        {
+          char response[64];
+          char current_value[32];
+          int ret;
+          format_filesize_input(options->file_size_filter.min_file_size, current_value, sizeof(current_value));
+
+          aff_copy(stdscr);
+          wmove(stdscr, INTER_OPTION_Y+4, INTER_OPTION_X);
+          wprintw(stdscr, "Minimum file size (e.g. 10k, 500M)");
+          wmove(stdscr, INTER_OPTION_Y+5, INTER_OPTION_X);
+          wprintw(stdscr, "Current: %s", strlen(current_value) > 0 ? current_value : "No limit");
+          wmove(stdscr, INTER_OPTION_Y+6, INTER_OPTION_X);
+          wprintw(stdscr, "New value (empty to clear, ESC to cancel): ");
+          wrefresh(stdscr);
+
+          ret = get_string_with_esc(stdscr, response, sizeof(response));
+          if(ret >= 0) /* Not cancelled with ESC */
+          {
+            if(strlen(response) == 0)
+            {
+              options->file_size_filter.min_file_size = 0;
+            }
+            else
+            {
+              char *ptr = response;
+              uint64_t new_size = parse_size_with_units(&ptr);
+              if(new_size > 0)
+              {
+                options->file_size_filter.min_file_size = new_size;
+                /* Validate min <= max */
+                if(options->file_size_filter.max_file_size > 0 &&
+                   options->file_size_filter.min_file_size > options->file_size_filter.max_file_size)
+                {
+                  mvwaddstr(stdscr, INTER_OPTION_Y+7, INTER_OPTION_X, "Error: Minimum cannot be greater than maximum! Press any key...");
+                  wgetch(stdscr);
+                  options->file_size_filter.min_file_size = 0;
+                }
+              }
+              else
+              {
+                mvwaddstr(stdscr, INTER_OPTION_Y+7, INTER_OPTION_X, "Invalid size format! Press any key...");
+                wgetch(stdscr);
+              }
+            }
+          }
+        }
+        break;
+      case '2':
+        {
+          char response[64];
+          char current_value[32];
+          int ret;
+          format_filesize_input(options->file_size_filter.max_file_size, current_value, sizeof(current_value));
+
+          aff_copy(stdscr);
+          wmove(stdscr, INTER_OPTION_Y+4, INTER_OPTION_X);
+          wprintw(stdscr, "Maximum file size (e.g. 500M, 2G)");
+          wmove(stdscr, INTER_OPTION_Y+5, INTER_OPTION_X);
+          wprintw(stdscr, "Current: %s", strlen(current_value) > 0 ? current_value : "No limit");
+          wmove(stdscr, INTER_OPTION_Y+6, INTER_OPTION_X);
+          wprintw(stdscr, "New value (empty to clear, ESC to cancel): ");
+          wrefresh(stdscr);
+
+          ret = get_string_with_esc(stdscr, response, sizeof(response));
+          if(ret >= 0) /* Not cancelled with ESC */
+          {
+            if(strlen(response) == 0)
+            {
+              options->file_size_filter.max_file_size = 0;
+            }
+            else
+            {
+              char *ptr = response;
+              uint64_t new_size = parse_size_with_units(&ptr);
+              if(new_size > 0)
+              {
+                options->file_size_filter.max_file_size = new_size;
+                /* Validate min <= max */
+                if(options->file_size_filter.min_file_size > 0 &&
+                   options->file_size_filter.min_file_size > options->file_size_filter.max_file_size)
+                {
+                  mvwaddstr(stdscr, INTER_OPTION_Y+7, INTER_OPTION_X, "Error: Maximum cannot be less than minimum! Press any key...");
+                  wgetch(stdscr);
+                  options->file_size_filter.max_file_size = 0;
+                }
+              }
+              else
+              {
+                mvwaddstr(stdscr, INTER_OPTION_Y+7, INTER_OPTION_X, "Invalid size format! Press any key...");
+                wgetch(stdscr);
+              }
+            }
+          }
+        }
+        break;
+      case key_ESC:
+      case 'q':
+      case 'Q':
+        return;
+    }
   }
 }
 #endif

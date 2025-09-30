@@ -123,12 +123,11 @@ static void sighup_hdlr(int sig)
 
 static void display_help(void)
 {
-  printf("\nUsage: photorec [/log] [/debug] [/maxsize size] [/d recup_dir] [file.dd|file.e01|device]\n"\
+  printf("\nUsage: photorec [/log] [/debug] [/d recup_dir] [file.dd|file.e01|device]\n"\
       "       photorec /version\n" \
       "\n" \
       "/log          : create a photorec.log file\n" \
       "/debug        : add debug information\n" \
-      "/maxsize size : set maximum file size limit (e.g. 500M, 2G, 1024K)\n" \
       "\n" \
       "PhotoRec searches for various file formats (JPEG, Office...). It stores files\n" \
       "in the recup_dir directory.\n");
@@ -154,43 +153,54 @@ static void display_version(void)
 }
 #endif
 
-uint64_t parse_file_size(const char *size_str)
+/* Parse file size with unit suffixes. Valid formats:
+ * - "1000"    : exact size in bytes (1000)
+ * - "10k"     : size in kilobytes (10240 bytes)
+ * - "1.5m"    : size in megabytes with decimal (1572864 bytes)
+ * - "2g"      : size in gigabytes (2147483648 bytes)
+ * - "1t"      : size in terabytes (1099511627776 bytes)
+ * - Units: k/K (kilobytes), m/M (megabytes), g/G (gigabytes), t/T (terabytes)
+ * - Decimal values supported (e.g., "1.5k", "0.5m")
+ */
+uint64_t parse_size_with_units(char **cmd)
 {
-  uint64_t size = 0;
+  char *ptr = *cmd;
+  double val = 0.0;
   char *endptr;
-  double value;
+  uint64_t multiplier = 1;
 
-  if(size_str == NULL || *size_str == '\0')
+  /* Parse number with decimal support */
+  val = strtod(ptr, &endptr);
+
+  if(endptr == ptr)
     return 0;
 
-  value = strtod(size_str, &endptr);
-  if(value < 0)
-    return 0;
+  ptr = endptr;
 
-  size = (uint64_t)value;
-
-  if(endptr != NULL && *endptr != '\0')
+  /* Parse unit suffix and convert to bytes */
+  if(*ptr == 'k' || *ptr == 'K')
   {
-    switch(tolower(*endptr))
-    {
-      case 'k':
-        size *= 1024ULL;
-        break;
-      case 'm':
-        size *= 1024ULL * 1024ULL;
-        break;
-      case 'g':
-        size *= 1024ULL * 1024ULL * 1024ULL;
-        break;
-      case 't':
-        size *= 1024ULL * 1024ULL * 1024ULL * 1024ULL;
-        break;
-      default:
-        return 0;
-    }
+    multiplier = 1024;
+    ptr++;
+  }
+  else if(*ptr == 'm' || *ptr == 'M')
+  {
+    multiplier = 1024 * 1024;
+    ptr++;
+  }
+  else if(*ptr == 'g' || *ptr == 'G')
+  {
+    multiplier = 1024 * 1024 * 1024;
+    ptr++;
+  }
+  else if(*ptr == 't' || *ptr == 'T')
+  {
+    multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+    ptr++;
   }
 
-  return size;
+  *cmd = ptr;
+  return (uint64_t)(val * multiplier);
 }
 
 int main( int argc, char **argv )
@@ -220,7 +230,7 @@ int main( int argc, char **argv )
     .lowmem=0,
     .verbose=0,
     .list_file_format=array_file_enable,
-    .max_filesize=0
+    .file_size_filter={.min_file_size=0, .max_file_size=0}
   };
   struct ph_param params;
   if(argc <= 0)
@@ -316,19 +326,6 @@ int main( int argc, char **argv )
         params.recup_dir=strdup(argv[i+1]);
 	/*@ assert params.recup_dir==\null || \freeable(params.recup_dir); */
       }
-      i++;
-    }
-    else if(i+1<argc && ((strcmp(argv[i],"/maxsize")==0)||(strcmp(argv[i],"-maxsize")==0)))
-    {
-      uint64_t max_size = parse_file_size(argv[i+1]);
-      if(max_size == 0)
-      {
-        log_error("Invalid file size: %s\n", argv[i+1]);
-        display_help();
-        free(params.recup_dir);
-        return 1;
-      }
-      options.max_filesize = max_size;
       i++;
     }
     else if((strcmp(argv[i],"/all")==0) || (strcmp(argv[i],"-all")==0))

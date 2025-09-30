@@ -30,6 +30,9 @@ extern "C" {
 
 #include "list.h"
 
+/* Forward declaration */
+typedef struct file_size_filter_struct file_size_filter_t;
+
 #if defined(DJGPP)
 #define PHOTOREC_MAX_FILE_SIZE (((uint64_t)1<<31)-1)
 #else
@@ -103,6 +106,7 @@ struct file_recovery_struct
   unsigned int blocksize;
   unsigned int flags;
   unsigned int data_check_tmp;
+  const file_size_filter_t *file_size_filter;  /* pointer to size filter from options */
 };
 
 typedef struct

@@ -167,11 +167,11 @@ pstatus_t QPhotorec::photorec_aux(alloc_data_t *list_search_space)
 	}
 	if(ind_stop==PSTATUS_OK)
 	{
-	  if(options->max_filesize > 0 && file_recovery.file_size + blocksize > options->max_filesize)
+	  if(options->file_size_filter.max_file_size > 0 && file_recovery.file_size + blocksize > options->file_size_filter.max_file_size)
 	  {
 	    data_check_status=DC_STOP;
 	    log_verbose("File should not be bigger than %llu, stop adding data\n",
-		(long long unsigned)options->max_filesize);
+		(long long unsigned)options->file_size_filter.max_file_size);
 	  }
 	  else
 	  {

@@ -791,9 +791,17 @@ pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params,
     reset_file_recovery(file_recovery);
     return PFSTATUS_BAD;
   }
-  if(options->max_filesize > 0 && file_recovery->file_size > options->max_filesize)
+  if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size)
   {
     file_block_truncate_zero(file_recovery, list_search_space);
+    unlink(file_recovery->filename);
+    reset_file_recovery(file_recovery);
+    return PFSTATUS_BAD;
+  }
+  if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size)
+  {
+    file_block_truncate_zero(file_recovery, list_search_space);
+    unlink(file_recovery->filename);
     reset_file_recovery(file_recovery);
     return PFSTATUS_BAD;
   }

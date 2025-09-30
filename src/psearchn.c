@@ -104,6 +104,7 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
   memset(&file_recovery, 0, sizeof(file_recovery));
   reset_file_recovery(&file_recovery);
   file_recovery.blocksize=blocksize;
+  file_recovery.file_size_filter=&options->file_size_filter;
   /*@ assert valid_file_recovery(&file_recovery); */
 #ifndef DISABLED_FOR_FRAMAC
   buffer_start=(unsigned char *)MALLOC(buffer_size);
@@ -204,12 +205,12 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
 	}
 	if(ind_stop==PSTATUS_OK)
 	{
-	  if(options->max_filesize > 0 && file_recovery.file_size + blocksize > options->max_filesize)
+	  if(options->file_size_filter.max_file_size > 0 && file_recovery.file_size + blocksize > options->file_size_filter.max_file_size)
 	  {
 	    data_check_status=DC_STOP;
 #ifndef DISABLED_FOR_FRAMAC
 	    log_verbose("File should not be bigger than %llu, stop adding data\n",
-		(long long unsigned)options->max_filesize);
+		(long long unsigned)options->file_size_filter.max_file_size);
 #endif
 	  }
 	  else

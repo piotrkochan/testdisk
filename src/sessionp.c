@@ -299,8 +299,20 @@ int session_save(const alloc_data_t *list_free_space, const struct ph_param *par
       fprintf(f_session, "expert,");
     if(options->lowmem>0)
       fprintf(f_session, "lowmem,");
-    if(options->max_filesize>0)
-      fprintf(f_session, "maxfile,%llu,", (unsigned long long)options->max_filesize);
+    if(options->file_size_filter.min_file_size > 0 || options->file_size_filter.max_file_size > 0)
+    {
+      fprintf(f_session, "filesize,");
+      if(options->file_size_filter.min_file_size > 0 && options->file_size_filter.max_file_size > 0)
+        fprintf(f_session, "%llu-%llu,",
+          (unsigned long long)options->file_size_filter.min_file_size,
+          (unsigned long long)options->file_size_filter.max_file_size);
+      else if(options->file_size_filter.min_file_size > 0)
+        fprintf(f_session, "%llu-,",
+          (unsigned long long)options->file_size_filter.min_file_size);
+      else
+        fprintf(f_session, "-%llu,",
+          (unsigned long long)options->file_size_filter.max_file_size);
+    }
     /* Save options - End */
     if(params->carve_free_space_only>0)
       fprintf(f_session,"freespace,");

@@ -151,6 +151,7 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 //      memset(&file_recovery, 0, sizeof(file_recovery_t));
       reset_file_recovery(&file_recovery);
       file_recovery.blocksize=blocksize;
+      file_recovery.file_size_filter=&options->file_size_filter;
       current_search_space=td_list_entry(search_walker, alloc_data_t, list);
       offset=current_search_space->start;
       buffer_olddata=buffer_start;
@@ -172,6 +173,7 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	  file_recovery_t file_recovery_new;
 //	  memset(&file_recovery_new, 0, sizeof(file_recovery_t));
 	  file_recovery_new.blocksize=blocksize;
+	  file_recovery_new.file_size_filter=&options->file_size_filter;
 	  file_recovery_new.location.start=offset;
 	  file_recovery_new.file_stat=NULL;
 	  td_list_for_each(tmpl, &file_check_list.list)
@@ -229,10 +231,10 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	}
 	if(need_to_check_file==0 && file_recovery.handle!=NULL && file_recovery.file_stat!=NULL)
 	{
-	  if(options->max_filesize > 0 && file_recovery.file_size + blocksize > options->max_filesize)
+	  if(options->file_size_filter.max_file_size > 0 && file_recovery.file_size + blocksize > options->file_size_filter.max_file_size)
 	  {
 	    log_verbose("File should not be bigger than %llu, stop adding data\n",
-		(long long unsigned)options->max_filesize);
+		(long long unsigned)options->file_size_filter.max_file_size);
 	    need_to_check_file=1;
 	  }
 	  else
