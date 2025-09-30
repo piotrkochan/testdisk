@@ -22,6 +22,7 @@
 
 #ifndef _TESTDISK_PHOTOREC_H
 #define _TESTDISK_PHOTOREC_H
+#include "types.h"
 #define MAX_FILES_PER_DIR	500
 #define DEFAULT_RECUP_DIR "recup_dir"
 #ifdef __cplusplus
@@ -34,6 +35,14 @@ typedef enum photorec_status photorec_status_t;
 typedef enum { PSTATUS_OK=0, PSTATUS_STOP=1, PSTATUS_EACCES=2, PSTATUS_ENOSPC=3} pstatus_t;
 typedef enum { PFSTATUS_BAD=0, PFSTATUS_OK=1, PFSTATUS_OK_TRUNCATED=2} pfstatus_t;
 
+struct file_size_filter_struct
+{
+  uint64_t min_file_size;  /* 0 = no limit */
+  uint64_t max_file_size;  /* 0 = no limit */
+};
+
+typedef struct file_size_filter_struct file_size_filter_t;
+
 struct ph_options
 {
   int paranoid;
@@ -43,6 +52,7 @@ struct ph_options
   unsigned int lowmem;
   int verbose;
   file_enable_t *list_file_format;
+  file_size_filter_t file_size_filter;
 };
 
 struct ph_param
@@ -115,7 +125,7 @@ void file_recovery_aborted(file_recovery_t *file_recovery, struct ph_param *para
   @ ensures  \result == PFSTATUS_BAD || \result == PFSTATUS_OK || \result == PFSTATUS_OK_TRUNCATED;
   @*/
 // ensures  valid_file_recovery(file_recovery);
-pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, alloc_data_t *list_search_space);
+pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const struct ph_options *options, alloc_data_t *list_search_space);
 
 /*@
   @ requires \valid_read(file_stats);
@@ -256,6 +266,8 @@ void params_reset(struct ph_param *params, const struct ph_options *options);
   @ assigns \nothing;
   @*/
 const char *status_to_name(const photorec_status_t status);
+
+uint64_t parse_size_with_units(char **cmd);
 
 /*@
   @ requires \valid(params);

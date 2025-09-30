@@ -91,6 +91,7 @@ pstatus_t photorec_find_blocksize(struct ph_param *params, const struct ph_optio
   params->file_nbr=0;
   reset_file_recovery(&file_recovery);
   file_recovery.blocksize=blocksize;
+  file_recovery.file_size_filter=&options->file_size_filter;
   buffer_size=blocksize + READ_SIZE;
   buffer_start=(unsigned char *)MALLOC(buffer_size);
   buffer_olddata=buffer_start;
@@ -110,6 +111,7 @@ pstatus_t photorec_find_blocksize(struct ph_param *params, const struct ph_optio
     {
       file_recovery_t file_recovery_new;
       file_recovery_new.blocksize=blocksize;
+      file_recovery_new.file_size_filter=&options->file_size_filter;
       file_recovery_new.location.start=offset;
 #if !defined(SINGLE_FORMAT) || defined(SINGLE_FORMAT_tar)
       if(file_recovery.file_stat!=NULL && file_recovery.file_stat->file_hint==&file_hint_tar &&
@@ -151,20 +153,27 @@ pstatus_t photorec_find_blocksize(struct ph_param *params, const struct ph_optio
     /* Check for data EOF */
     if(file_recovery.file_stat!=NULL)
     {
-      data_check_t res=DC_CONTINUE;
-      if(file_recovery.data_check!=NULL)
-	res=file_recovery.data_check(buffer_olddata, 2*blocksize, &file_recovery);
-      file_recovery.file_size+=blocksize;
-      if(res==DC_STOP || res==DC_ERROR)
+      /* Check for maximum filesize before processing data */
+      if(options->file_size_filter.max_file_size > 0 && file_recovery.file_size + blocksize > options->file_size_filter.max_file_size)
       {
-	/* EOF found */
-	reset_file_recovery(&file_recovery);
+        reset_file_recovery(&file_recovery);
       }
-    }
-    /* Check for maximum filesize */
-    if(file_recovery.file_stat!=NULL && file_recovery.file_stat->file_hint->max_filesize>0 && file_recovery.file_size>=file_recovery.file_stat->file_hint->max_filesize)
-    {
-      reset_file_recovery(&file_recovery);
+      else if(file_recovery.file_stat->file_hint->max_filesize>0 && file_recovery.file_size + blocksize > file_recovery.file_stat->file_hint->max_filesize)
+      {
+        reset_file_recovery(&file_recovery);
+      }
+      else
+      {
+        data_check_t res=DC_CONTINUE;
+        if(file_recovery.data_check!=NULL)
+	  res=file_recovery.data_check(buffer_olddata, 2*blocksize, &file_recovery);
+        file_recovery.file_size+=blocksize;
+        if(res==DC_STOP || res==DC_ERROR)
+        {
+	  /* EOF found */
+	  reset_file_recovery(&file_recovery);
+        }
+      }
     }
 
     if(params->file_nbr >= 10)

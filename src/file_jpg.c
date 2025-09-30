@@ -55,6 +55,7 @@
 #include "common.h"
 #include "log.h"
 #include "file_jpg.h"
+#include "photorec.h"
 #if !defined(MAIN_jpg) && !defined(SINGLE_FORMAT)
 #include "file_riff.h"
 #endif
@@ -2081,6 +2082,11 @@ static void jpg_save_thumbnail(const file_recovery_t *file_recovery, const char 
 #ifndef DISABLED_FOR_FRAMAC
     *(sep+1)='t';
 #endif
+    /* Check if thumbnail size meets file recovery size filter requirements */
+    if(file_recovery->file_size_filter != NULL &&
+       file_recovery->file_size_filter->min_file_size > 0 &&
+       thumb_size < file_recovery->file_size_filter->min_file_size)
+      return;
 #ifndef DISABLED_FOR_FRAMAC
     if((out=fopen(thumbname,"wb"))!=NULL)
     {

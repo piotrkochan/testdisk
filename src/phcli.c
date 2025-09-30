@@ -208,6 +208,40 @@ int menu_photorec_cli(list_part_t *list_part, struct ph_param *params, struct ph
       if(file_select_cli(options->list_file_format, &params->cmd_run) < 0)
 	return -1;
     }
+    else if(check_command(&params->cmd_run,"filesize,",9)==0)
+    {
+      char *ptr = params->cmd_run;
+      /* Check for leading dash (only max) */
+      if(*ptr == '-')
+      {
+        ptr++;
+        options->file_size_filter.max_file_size = parse_size_with_units(&ptr);
+      }
+      else
+      {
+        /* Parse min value */
+        options->file_size_filter.min_file_size = parse_size_with_units(&ptr);
+        /* Check for range separator */
+        if(*ptr == '-')
+        {
+          ptr++;
+          /* Check if there's a max value after dash */
+          if(*ptr && *ptr != ',' && *ptr != '\0')
+          {
+            options->file_size_filter.max_file_size = parse_size_with_units(&ptr);
+          }
+        }
+      }
+      /* Validate min <= max */
+      if(options->file_size_filter.min_file_size > 0 &&
+         options->file_size_filter.max_file_size > 0 &&
+         options->file_size_filter.min_file_size > options->file_size_filter.max_file_size)
+      {
+        options->file_size_filter.min_file_size = 0;
+        options->file_size_filter.max_file_size = 0;
+      }
+      params->cmd_run = ptr;
+    }
     else if(check_command(&params->cmd_run,"blocksize,",10)==0)
     {
       user_blocksize=get_int_from_command(&params->cmd_run);
