@@ -87,6 +87,7 @@ pstatus_t photorec_find_blocksize(struct ph_param *params, const struct ph_optio
   /*@ assert read_size >= 65536; */
   alloc_data_t *current_search_space;
   file_recovery_t file_recovery;
+  memset(&file_recovery, 0, sizeof(file_recovery_t));
 #ifndef DISABLED_FOR_FRAMAC
   params->file_nbr=0;
   reset_file_recovery(&file_recovery);
@@ -110,6 +111,7 @@ pstatus_t photorec_find_blocksize(struct ph_param *params, const struct ph_optio
     const uint64_t old_offset=offset;
     {
       file_recovery_t file_recovery_new;
+      memset(&file_recovery_new, 0, sizeof(file_recovery_t));
       file_recovery_new.blocksize=blocksize;
       file_recovery_new.file_size_filter=&options->file_size_filter;
       file_recovery_new.location.start=offset;

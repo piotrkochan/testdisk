@@ -66,6 +66,7 @@
 #include "log.h"
 #include "setdate.h"
 #include "dfxml.h"
+#include "image_filter.h"
 
 /* #define DEBUG_FILE_FINISH */
 /* #define DEBUG_UPDATE_SEARCH_SPACE */
@@ -652,7 +653,7 @@ static void file_block_free(alloc_list_t *list_allocation)
   @ requires \separated(file_recovery, params, file_recovery->handle);
   @ decreases 0;
   @*/
-static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid)
+static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const struct ph_options *options, const int paranoid)
 {
 #ifndef DISABLED_FOR_FRAMAC
   /*@ assert valid_file_recovery(file_recovery); */
@@ -680,6 +681,28 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
 	(long long unsigned) file_recovery->min_filesize);
 #endif
     file_recovery->file_size=0;
+  }
+  if(params->image_filter && has_any_image_size_filter(params->image_filter) &&
+     file_recovery->file_stat->file_hint->is_image ) {
+#ifdef DEBUG_FILE_FINISH
+    log_trace("Image filter check: file=%s, size=%llu, width=%u, height=%u\n",
+           file_recovery->filename,
+           (unsigned long long)file_recovery->file_size,
+           file_recovery->image_data.width,
+           file_recovery->image_data.height);
+#endif
+
+    // Check file size filter
+    if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size) {
+        file_recovery->file_size=0;
+    }
+    else if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size) {
+        file_recovery->file_size=0;
+    }
+    // Check image dimensions filter
+    else if(should_skip_image_by_dimensions(params->image_filter, file_recovery->image_data.width, file_recovery->image_data.height)) {
+        file_recovery->file_size=0;
+    }
   }
   if(file_recovery->file_size==0)
   {
@@ -733,12 +756,30 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
  */
 
 int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
-    alloc_data_t *list_search_space)
+    const struct ph_options *options, alloc_data_t *list_search_space)
 {
+
   if(file_recovery->file_stat==NULL)
     return 0;
+
+  // Handle memory buffering for images with filtering
+  if(file_recovery->use_memory_buffering) {
+    if(file_recovery->image_filter && file_recovery->file_check_presave) {
+      if(!file_recovery->file_check_presave(file_recovery->memory_buffer, file_recovery->buffer_size, file_recovery)) {
+        // File rejected by filters - don't create it at all
+        reset_file_recovery(file_recovery);
+        return 0;
+      }
+    }
+    // File passed filters - flush to disk
+    if(flush_memory_buffer_to_file(file_recovery) < 0) {
+      reset_file_recovery(file_recovery);
+      return -1;
+    }
+  }
+
   if(file_recovery->handle)
-    file_finish_aux(file_recovery, params, 2);
+    file_finish_aux(file_recovery, params, options, 2);
   if(file_recovery->file_size==0)
   {
     if(file_recovery->offset_error!=0)
@@ -752,6 +793,7 @@ int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
     reset_file_recovery(file_recovery);
     return 0;
   }
+
   file_block_truncate(file_recovery, list_search_space, params->blocksize);
   file_block_log(file_recovery, params->disk->sector_size);
 #ifdef ENABLE_DFXML
@@ -781,10 +823,29 @@ void file_recovery_aborted(file_recovery_t *file_recovery, struct ph_param *para
 pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const struct ph_options *options, alloc_data_t *list_search_space)
 {
   int file_truncated;
+
+
   if(file_recovery->file_stat==NULL)
     return PFSTATUS_BAD;
+
+  // Handle memory buffering for images with filtering
+  if(file_recovery->use_memory_buffering) {
+    if(file_recovery->image_filter && file_recovery->file_check_presave) {
+      if(!file_recovery->file_check_presave(file_recovery->memory_buffer, file_recovery->buffer_size, file_recovery)) {
+        // File rejected by filters - don't create it at all
+        reset_file_recovery(file_recovery);
+        return PFSTATUS_BAD;
+      }
+    }
+    // File passed filters - flush to disk
+    if(flush_memory_buffer_to_file(file_recovery) < 0) {
+      reset_file_recovery(file_recovery);
+      return PFSTATUS_BAD;
+    }
+  }
+
   if(file_recovery->handle)
-    file_finish_aux(file_recovery, params, (options->paranoid==0?0:1));
+    file_finish_aux(file_recovery, params, options, (options->paranoid==0?0:1));
   if(file_recovery->file_size==0)
   {
     file_block_truncate_zero(file_recovery, list_search_space);
@@ -810,6 +871,7 @@ pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params,
 #ifdef ENABLE_DFXML
   xml_log_file_recovered(file_recovery);
 #endif
+
   file_block_free(&file_recovery->location);
   reset_file_recovery(file_recovery);
   return (file_truncated>0?PFSTATUS_OK_TRUNCATED:PFSTATUS_OK);
@@ -979,6 +1041,7 @@ void params_reset(struct ph_param *params, const struct ph_options *options)
 {
   /*@ assert valid_ph_param(params); */
   params->file_stats=init_file_stats(options->list_file_format);
+  params->image_filter=&options->image_filter;
   /*@ assert valid_ph_param(params); */
   params_reset_aux(params);
 }
@@ -993,7 +1056,7 @@ const char *status_to_name(const photorec_status_t status)
       return "STATUS_FIND_OFFSET";
     case STATUS_EXT2_ON:
       return "STATUS_EXT2_ON";
-    case STATUS_EXT2_ON_BF:			
+    case STATUS_EXT2_ON_BF:
       return "STATUS_EXT2_ON_BF";
     case STATUS_EXT2_OFF:
       return "STATUS_EXT2_OFF";
@@ -1007,6 +1070,55 @@ const char *status_to_name(const photorec_status_t status)
     default:
       return "STATUS_QUIT";
   }
+}
+
+/* Parse file size with unit suffixes. Valid formats:
+ * - "1000"    : exact size in bytes (1000)
+ * - "10k"     : size in kilobytes (10240 bytes)
+ * - "1.5m"    : size in megabytes with decimal (1572864 bytes)
+ * - "2g"      : size in gigabytes (2147483648 bytes)
+ * - Units: k/K (kilobytes), m/M (megabytes), g/G (gigabytes), t/T (terabytes)
+ * - Decimal values supported (e.g., "1.5k", "0.5m")
+ */
+uint64_t parse_size_with_units(char **cmd)
+{
+  char *ptr = *cmd;
+  double val = 0.0;
+
+  /* Parse number with decimal support */
+  char *endptr;
+  val = strtod(ptr, &endptr);
+
+  if(endptr == ptr)
+    return 0;
+
+  ptr = endptr;
+
+  /* Parse unit suffix and convert to bytes */
+  uint64_t multiplier = 1;
+  if(*ptr == 'k' || *ptr == 'K')
+  {
+    multiplier = 1024;
+    ptr++;
+  }
+  else if(*ptr == 'm' || *ptr == 'M')
+  {
+    multiplier = 1024 * 1024;
+    ptr++;
+  }
+  else if(*ptr == 'g' || *ptr == 'G')
+  {
+    multiplier = 1024 * 1024 * 1024;
+    ptr++;
+  }
+  else if(*ptr == 't' || *ptr == 'T')
+  {
+    multiplier = 1024ULL * 1024 * 1024 * 1024;
+    ptr++;
+  }
+
+  *cmd = ptr;
+  return (uint64_t)(val * multiplier);
 }
 
 void status_inc(struct ph_param *params, const struct ph_options *options)

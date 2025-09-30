@@ -53,6 +53,7 @@ struct ph_options
   int verbose;
   file_enable_t *list_file_format;
   file_size_filter_t file_size_filter;
+  image_size_filter_t image_filter;
 };
 
 struct ph_param
@@ -72,6 +73,7 @@ struct ph_param
   unsigned int file_nbr;
   file_stat_t *file_stats;
   uint64_t offset;
+  const image_size_filter_t *image_filter;
 };
 
 /*@
@@ -101,8 +103,8 @@ int get_prev_file_header(const alloc_data_t *list_search_space, alloc_data_t **c
   @ requires \separated(file_recovery, params, list_search_space);
   @ requires valid_disk(params->disk);
   @*/
-int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params, 
-    alloc_data_t *list_search_space);
+int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
+    const struct ph_options *options, alloc_data_t *list_search_space);
 
 /*@
   @ requires \valid(file_recovery);
@@ -267,6 +269,9 @@ void params_reset(struct ph_param *params, const struct ph_options *options);
   @*/
 const char *status_to_name(const photorec_status_t status);
 
+/*@
+  @ assigns \nothing;
+  @*/
 uint64_t parse_size_with_units(char **cmd);
 
 /*@
