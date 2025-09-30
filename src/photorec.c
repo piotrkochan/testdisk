@@ -794,6 +794,24 @@ int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
     return 0;
   }
 
+  /* Check filesize filter (same as file_finish2) */
+  if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size)
+  {
+    file_block_truncate(file_recovery, list_search_space, params->blocksize);
+    file_block_free(&file_recovery->location);
+    unlink(file_recovery->filename);
+    reset_file_recovery(file_recovery);
+    return 0;
+  }
+  if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size)
+  {
+    file_block_truncate(file_recovery, list_search_space, params->blocksize);
+    file_block_free(&file_recovery->location);
+    unlink(file_recovery->filename);
+    reset_file_recovery(file_recovery);
+    return 0;
+  }
+
   file_block_truncate(file_recovery, list_search_space, params->blocksize);
   file_block_log(file_recovery, params->disk->sector_size);
 #ifdef ENABLE_DFXML
@@ -854,17 +872,23 @@ pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params,
   }
   if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size)
   {
-    file_block_truncate_zero(file_recovery, list_search_space);
+    /* DON'T use file_block_truncate_zero - it marks sectors as containing this file type,
+     * causing infinite rescanning! Just truncate without marking. */
+    file_block_truncate(file_recovery, list_search_space, params->blocksize);
+    file_block_free(&file_recovery->location);
     unlink(file_recovery->filename);
     reset_file_recovery(file_recovery);
-    return PFSTATUS_BAD;
+    return PFSTATUS_OK;
   }
   if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size)
   {
-    file_block_truncate_zero(file_recovery, list_search_space);
+    /* DON'T use file_block_truncate_zero - it marks sectors as containing this file type,
+     * causing infinite rescanning! Just truncate without marking. */
+    file_block_truncate(file_recovery, list_search_space, params->blocksize);
+    file_block_free(&file_recovery->location);
     unlink(file_recovery->filename);
     reset_file_recovery(file_recovery);
-    return PFSTATUS_BAD;
+    return PFSTATUS_OK;
   }
   file_truncated=file_block_truncate(file_recovery, list_search_space, params->blocksize);
   file_block_log(file_recovery, params->disk->sector_size);

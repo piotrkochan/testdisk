@@ -1216,6 +1216,51 @@ time_t get_time_from_YYYYMMDD_HHMMSS(const char *date_asc)
   return mktime(&tm_time);
 }
 
+// Buffer pool for reusing memory buffers to avoid calloc/free overhead
+#define BUFFER_POOL_MAX_SIZE 100
+static struct {
+  unsigned char *buffers[BUFFER_POOL_MAX_SIZE];
+  uint64_t buffer_sizes[BUFFER_POOL_MAX_SIZE];
+  int count;
+} buffer_pool = {.count = 0};
+
+static unsigned char* buffer_pool_acquire(uint64_t size)
+{
+  // Try to reuse a buffer from pool with matching size
+  for(int i = 0; i < buffer_pool.count; i++) {
+    if(buffer_pool.buffer_sizes[i] == size) {
+      unsigned char *buf = buffer_pool.buffers[i];
+      // Remove from pool by shifting remaining elements
+      for(int j = i; j < buffer_pool.count - 1; j++) {
+        buffer_pool.buffers[j] = buffer_pool.buffers[j + 1];
+        buffer_pool.buffer_sizes[j] = buffer_pool.buffer_sizes[j + 1];
+      }
+      buffer_pool.count--;
+      // Don't clear - buffer will be overwritten anyway
+      return buf;
+    }
+  }
+
+  // No buffer available, allocate new one
+  return (unsigned char*)calloc(size, 1);
+}
+
+static void buffer_pool_release(unsigned char *buffer, uint64_t size)
+{
+  if(buffer == NULL)
+    return;
+
+  // Return to pool if not full
+  if(buffer_pool.count < BUFFER_POOL_MAX_SIZE) {
+    buffer_pool.buffers[buffer_pool.count] = buffer;
+    buffer_pool.buffer_sizes[buffer_pool.count] = size;
+    buffer_pool.count++;
+  } else {
+    // Pool full, just free it
+    free(buffer);
+  }
+}
+
 static uint64_t calculate_max_buffer_size(file_recovery_t *file_recovery)
 {
   uint64_t max_size = 0;
@@ -1233,7 +1278,7 @@ static uint64_t calculate_max_buffer_size(file_recovery_t *file_recovery)
 
   // Limit memory buffer to reasonable size (100MB) to avoid allocation failures
   const uint64_t MAX_MEMORY_BUFFER = 100 * 1024 * 1024; // 100MB
-  if(max_size > MAX_MEMORY_BUFFER) {
+  if(max_size == 0 || max_size > MAX_MEMORY_BUFFER) {
     max_size = MAX_MEMORY_BUFFER;
   }
 
@@ -1251,7 +1296,7 @@ int init_memory_buffer(file_recovery_t *file_recovery)
     return 0;
   }
 
-  file_recovery->memory_buffer = (unsigned char*)calloc(file_recovery->buffer_max_size, 1);
+  file_recovery->memory_buffer = buffer_pool_acquire(file_recovery->buffer_max_size);
   if(file_recovery->memory_buffer == NULL) {
     file_recovery->use_memory_buffering = 0;
     return -1;
@@ -1284,11 +1329,7 @@ int flush_memory_buffer_to_file(file_recovery_t *file_recovery)
   }
 
   if(file_recovery->handle == NULL) {
-#if defined(__CYGWIN__) || defined(__MINGW32__)
     file_recovery->handle = fopen(file_recovery->filename, "w+b");
-#else
-    file_recovery->handle = fopen(file_recovery->filename, "w+b");
-#endif
     if(file_recovery->handle == NULL) {
       return -1;
     }
@@ -1313,9 +1354,9 @@ int flush_memory_buffer_to_file(file_recovery_t *file_recovery)
 void free_memory_buffer(file_recovery_t *file_recovery)
 {
   if(file_recovery) {
-    // Only free if use_memory_buffering was actually set (not garbage)
+    // Return buffer to pool instead of freeing
     if(file_recovery->use_memory_buffering == 1 && file_recovery->memory_buffer) {
-      free(file_recovery->memory_buffer);
+      buffer_pool_release(file_recovery->memory_buffer, file_recovery->buffer_max_size);
     }
     file_recovery->memory_buffer = NULL;
     file_recovery->buffer_size = 0;
