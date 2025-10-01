@@ -57,14 +57,15 @@
 #define SESSION_MAXSIZE 40960
 #define SESSION_FILENAME "photorec.ses"
 
-static int session_save_empty(void)
+static int session_save_empty(const struct ph_options *options)
 {
   FILE *f_session;
-  f_session=fopen(SESSION_FILENAME,"wb");
+  const char *filename = (options->session_file != NULL) ? options->session_file : SESSION_FILENAME;
+  f_session=fopen(filename,"wb");
   if(!f_session)
   {
 #ifndef DISABLED_FOR_FRAMAC
-    log_critical("Can't create photorec.ses file: %s\n",strerror(errno));
+    log_critical("Can't create %s file: %s\n", filename, strerror(errno));
 #endif
     return -1;
   }
@@ -85,7 +86,7 @@ static int session_save_empty(void)
   return 0;
 }
 
-int session_load(char **cmd_device, char **current_cmd, alloc_data_t *list_free_space)
+int session_load(char **cmd_device, char **current_cmd, alloc_data_t *list_free_space, const char *session_file)
 {
   FILE *f_session;
   char *buffer;
@@ -95,13 +96,14 @@ int session_load(char **cmd_device, char **current_cmd, alloc_data_t *list_free_
   unsigned int buffer_size;
 //  time_t my_time;
   char *info=NULL;
+  const char *filename;
   *cmd_device=NULL;
   *current_cmd=NULL;
-  f_session=fopen(SESSION_FILENAME,"rb");
+  filename = (session_file != NULL) ? session_file : SESSION_FILENAME;
+  f_session=fopen(filename,"rb");
   if(!f_session)
   {
-    log_info("Can't open photorec.ses file: %s\n",strerror(errno));
-    session_save_empty();
+    log_info("Can't open %s file: %s\n", filename, strerror(errno));
     return -1;
   }
 #ifndef DISABLED_FOR_FRAMAC
@@ -201,13 +203,17 @@ int session_load(char **cmd_device, char **current_cmd, alloc_data_t *list_free_
 int session_save(const alloc_data_t *list_free_space, const struct ph_param *params,  const struct ph_options *options)
 {
   FILE *f_session;
+  const char *filename;
   if(params->status==STATUS_QUIT)
     return 0;
-  f_session=fopen(SESSION_FILENAME,"wb");
+  if(options->no_session != 0)
+    return 0;
+  filename = (options->session_file != NULL) ? options->session_file : SESSION_FILENAME;
+  f_session=fopen(filename,"wb");
   if(!f_session)
   {
 #ifndef DISABLED_FOR_FRAMAC
-    log_critical("Can't create photorec.ses file: %s\n",strerror(errno));
+    log_critical("Can't create %s file: %s\n", filename, strerror(errno));
 #endif
     /*@ assert \valid_read(list_free_space); */
     /*@ assert valid_ph_param(params); */
@@ -397,7 +403,10 @@ time_t regular_session_save(alloc_data_t *list_free_space, struct ph_param *para
 {
   time_t new_time;
   /* Save current progress */
-  session_save(list_free_space, params, options);
+  if(options->no_session == 0)
+  {
+    session_save(list_free_space, params, options);
+  }
   new_time=time(NULL);
   /* If it takes more then 30s to save the session, save every 15 minutes instead of every 5 minutes */
   return new_time+(current_time+30<new_time?15:5)*60;

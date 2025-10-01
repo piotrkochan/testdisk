@@ -54,6 +54,8 @@ struct ph_options
   file_enable_t *list_file_format;
   file_size_filter_t file_size_filter;
   image_size_filter_t image_filter;
+  char *session_file;
+  int no_session;
 };
 
 struct ph_param

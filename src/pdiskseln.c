@@ -250,11 +250,11 @@ int do_curses_photorec(struct ph_param *params, struct ph_options *options, cons
   };
   const int resume_session=(params->cmd_device!=NULL && strcmp(params->cmd_device,"resume")==0);
 #ifndef DISABLED_FOR_FRAMAC
-  if(params->cmd_device==NULL || resume_session!=0)
+  if((params->cmd_device==NULL || resume_session!=0) && options->no_session==0)
   {
     char *saved_device=NULL;
     char *saved_cmd=NULL;
-    session_load(&saved_device, &saved_cmd,&list_search_space);
+    session_load(&saved_device, &saved_cmd,&list_search_space, options->session_file);
     if(saved_device!=NULL && saved_cmd!=NULL && !td_list_empty(&list_search_space.list)
 #if defined(HAVE_NCURSES)
 	&& ( resume_session!=0 || ask_confirmation("Continue previous session ? (Y/N)")!=0)
