@@ -1411,6 +1411,18 @@ static void interface_filesize_photorec_ncurses(struct ph_options *options)
         }
       }
     }
+    /* Validate max_file_size >= 1KB for optimal performance */
+    if(options->file_size_filter.max_file_size > 0 && options->file_size_filter.max_file_size < 1024) {
+      wprintw(stdscr, "\nERROR: File size max limit must be at least 1KB (you entered %llu bytes)\n",
+              (unsigned long long)options->file_size_filter.max_file_size);
+      wprintw(stdscr, "Small max limits cause suboptimal performance due to excessive file I/O overhead.\n");
+      wprintw(stdscr, "Press any key to continue...");
+      wrefresh(stdscr);
+      wgetch(stdscr);
+      options->file_size_filter.min_file_size = 0;
+      options->file_size_filter.max_file_size = 0;
+      return;
+    }
     /* Validate min <= max */
     if(options->file_size_filter.min_file_size > 0 &&
        options->file_size_filter.max_file_size > 0 &&

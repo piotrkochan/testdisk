@@ -211,6 +211,7 @@ int menu_photorec_cli(list_part_t *list_part, struct ph_param *params, struct ph
     }
     else if(check_command(&params->cmd_run,"filesize,",9)==0)
     {
+      /* params->cmd_run already points past "filesize," after check_command */
       char *ptr = params->cmd_run;
       /* Check for leading dash (only max) */
       if(*ptr == '-')
@@ -232,6 +233,14 @@ int menu_photorec_cli(list_part_t *list_part, struct ph_param *params, struct ph
             options->file_size_filter.max_file_size = parse_size_with_units(&ptr);
           }
         }
+      }
+      /* Validate max_file_size >= 1KB for optimal performance */
+      if(options->file_size_filter.max_file_size > 0 && options->file_size_filter.max_file_size < 1024)
+      {
+        printf("\nERROR: File size max limit must be at least 1KB (you specified %llu bytes)\n",
+               (unsigned long long)options->file_size_filter.max_file_size);
+        printf("Small max limits cause suboptimal performance due to excessive file I/O overhead.\n\n");
+        exit(1);
       }
       /* Validate min <= max */
       if(options->file_size_filter.min_file_size > 0 &&
