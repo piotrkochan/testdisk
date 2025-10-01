@@ -34,7 +34,7 @@ extern "C" {
 // ensures  *cmd_device==\null  || valid_read_string(*cmd_device);
 // ensures  *current_cmd==\null || valid_read_string(*current_cmd);
 // ensures  valid_list_search_space(list_free_space);
-int session_load(char **cmd_device, char **current_cmd, alloc_data_t *list_free_space);
+int session_load(char **cmd_device, char **current_cmd, alloc_data_t *list_free_space, const char *session_file);
 
 /*@
   @ requires \valid_read(list_free_space);

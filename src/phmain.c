@@ -124,12 +124,14 @@ static void sighup_hdlr(int sig)
 
 static void display_help(void)
 {
-  printf("\nUsage: photorec [/log] [/logjson log.jsonl] [/debug] [/d recup_dir] [file.dd|file.e01|device]\n"\
+  printf("\nUsage: photorec [/log] [/logjson log.jsonl] [/sessfile session.ses] [/nosess] [/debug] [/d recup_dir] [file.dd|file.e01|device]\n"\
       "       photorec /version\n" \
       "\n" \
-      "/log            : create a photorec.log file\n" \
-      "/logjson <file> : create a log in JSON format\n" \
-      "/debug          : add debug information\n" \
+      "/log              : create a photorec.log file\n" \
+      "/logjson <file>   : create a log in JSON format\n" \
+      "/sessfile <file>  : specify custom path to session file\n" \
+      "/nosess           : disable session file loading and saving\n" \
+      "/debug            : add debug information\n" \
       "\n" \
       "PhotoRec searches for various file formats (JPEG, Office...). It stores files\n" \
       "in the recup_dir directory.\n");
@@ -183,7 +185,9 @@ int main( int argc, char **argv )
     .expert=0,
     .lowmem=0,
     .verbose=0,
-    .list_file_format=array_file_enable
+    .list_file_format=array_file_enable,
+    .session_file=NULL,
+    .no_session=0
   };
   struct ph_param params;
   if(argc <= 0)
@@ -258,16 +262,25 @@ int main( int argc, char **argv )
       if(create_log==TD_LOG_NONE)
         create_log=TD_LOG_APPEND;
     }
+    else if(i+1<argc && ((strcmp(argv[i],"/logjson")==0)||(strcmp(argv[i],"-logjson")==0)))
+    {
+      logfile_json=argv[i+1];
+      i++;
+    }
+    else if(i+1<argc && ((strcmp(argv[i],"/sessfile")==0)||(strcmp(argv[i],"-sessfile")==0)))
+    {
+      options.session_file=argv[i+1];
+      i++;
+    }
+    else if((strcmp(argv[i],"/nosess")==0)||(strcmp(argv[i],"-nosess")==0))
+    {
+      options.no_session=1;
+    }
     else if((strcmp(argv[i],"/debug")==0) || (strcmp(argv[i],"-debug")==0))
     {
       options.verbose++;
       if(create_log==TD_LOG_NONE)
         create_log=TD_LOG_APPEND;
-    }
-    else if(i+1<argc && ((strcmp(argv[i],"/logjson")==0)||(strcmp(argv[i],"-logjson")==0)))
-    {
-      logfile_json=argv[i+1];
-      i++;
     }
     else if(i+1<argc && ((strcmp(argv[i],"/d")==0)||(strcmp(argv[i],"-d")==0)))
     {
@@ -387,6 +400,20 @@ int main( int argc, char **argv )
 #endif
   if(create_log!=TD_LOG_NONE && log_opened==0)
     log_opened=log_open_default(logfile, create_log, &log_errno);
+  /* Validate session file accessibility before starting ncurses */
+  if(options.session_file != NULL)
+  {
+    FILE *test_session = fopen(options.session_file, "rb");
+    if(test_session == NULL)
+    {
+      fprintf(stderr, "\nError: Can't open session file %s: %s\n",
+              options.session_file, strerror(errno));
+      free(params.recup_dir);
+      log_close();
+      return 1;
+    }
+    fclose(test_session);
+  }
 #ifdef HAVE_NCURSES
   /* ncurses need locale for correct unicode support */
   if(start_ncurses("PhotoRec", argv[0]))

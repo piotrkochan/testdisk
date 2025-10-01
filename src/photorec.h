@@ -43,6 +43,8 @@ struct ph_options
   unsigned int lowmem;
   int verbose;
   file_enable_t *list_file_format;
+  char *session_file;
+  int no_session;
 };
 
 struct ph_param
