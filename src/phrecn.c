@@ -542,57 +542,8 @@ static void format_filesize_input(uint64_t size, char *buffer, size_t buffer_siz
   }
 }
 
-/* Simple input function with ESC support - returns -1 on ESC, 0+ for string length */
-static int get_string_with_esc(WINDOW *window, char *str, int max_len)
-{
-  int ch;
-  int pos = 0;
-  int y, x;
-
-  str[0] = '\0';
-  getyx(window, y, x);
-
-  curs_set(1);
-
-  while(1)
-  {
-    ch = wgetch(window);
-
-    if(ch == key_ESC)
-    {
-      curs_set(0);
-      return -1; /* ESC pressed - cancel */
-    }
-    else if(ch == '\n' || ch == '\r')
-    {
-      break; /* Enter pressed - accept */
-    }
-    else if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
-    {
-      if(pos > 0)
-      {
-        pos--;
-        str[pos] = '\0';
-        wmove(window, y, x + pos);
-        waddch(window, ' ');
-        wmove(window, y, x + pos);
-      }
-    }
-    else if(ch >= 32 && ch <= 126 && pos < max_len - 1)
-    {
-      str[pos] = ch;
-      pos++;
-      str[pos] = '\0';
-      waddch(window, ch);
-    }
-    wrefresh(window);
-  }
-
-  curs_set(0);
-  return pos;
-}
-
 /* Forward declarations */
+static void interface_edit_filesize_field(file_size_filter_t *filter, int field_num);
 static void interface_filesize_photorec_ncurses(struct ph_options *options);
 
 void interface_options_photorec_ncurses(struct ph_options *options)
@@ -952,9 +903,6 @@ static void interface_edit_image_filter_field(image_size_filter_t *filter, int f
 
   /* Parse and apply input */
   if (strlen(input) > 0) {
-    char temp_cmd[128];
-    char *cmd_ptr;
-
     switch(field_num) {
       case 1: /* width min */
         {
@@ -994,7 +942,7 @@ static void interface_edit_image_filter_field(image_size_filter_t *filter, int f
         /* Clear saved format */
         pixels_max_format[0] = '\0';
         break;
-      case 5: /* height min */
+      case 3: /* height min */
         {
           char *ptr = input;
           uint64_t val = (uint64_t)get_int_from_command(&ptr);
@@ -1013,7 +961,7 @@ static void interface_edit_image_filter_field(image_size_filter_t *filter, int f
         /* Clear saved format */
         pixels_min_format[0] = '\0';
         break;
-      case 6: /* height max */
+      case 4: /* height max */
         {
           char *ptr = input;
           uint64_t val = (uint64_t)get_int_from_command(&ptr);
@@ -1032,7 +980,7 @@ static void interface_edit_image_filter_field(image_size_filter_t *filter, int f
         /* Clear saved format */
         pixels_max_format[0] = '\0';
         break;
-      case 7: /* pixels min */
+      case 5: /* pixels min */
         /* Check string length first to prevent buffer overflows */
         if (strlen(input) > 31) {
           aff_copy(stdscr);
@@ -1178,7 +1126,7 @@ static void interface_edit_image_filter_field(image_size_filter_t *filter, int f
         filter->min_width = 0;
         filter->min_height = 0;
         break;
-      case 8: /* pixels max */
+      case 6: /* pixels max */
         /* Check string length first to prevent buffer overflows */
         if (strlen(input) > 31) {
           aff_copy(stdscr);
@@ -1357,123 +1305,447 @@ static void interface_edit_image_filter_field(image_size_filter_t *filter, int f
   }
 }
 
-static void interface_filesize_photorec_ncurses(struct ph_options *options)
+static void interface_edit_filesize_field(file_size_filter_t *filter, int field_num)
 {
-  char input[64];
-  char prompt_text[128];
+  char input[32];
+  char prompt[64];
+  char current_value[32] = "";
+  int ch;
+  int input_pos = 0;
+  int prompt_len = 44;
 
-  /* Show current values */
-  if (options->file_size_filter.min_file_size > 0 && options->file_size_filter.max_file_size > 0) {
-    snprintf(prompt_text, sizeof(prompt_text), "File size range (current: %luk-%luk): ",
-             (unsigned long)(options->file_size_filter.min_file_size/1024),
-             (unsigned long)(options->file_size_filter.max_file_size/1024));
-  } else if (options->file_size_filter.min_file_size > 0) {
-    snprintf(prompt_text, sizeof(prompt_text), "File size range (current: %luk-): ",
-             (unsigned long)(options->file_size_filter.min_file_size/1024));
-  } else if (options->file_size_filter.max_file_size > 0) {
-    snprintf(prompt_text, sizeof(prompt_text), "File size range (current: -%luk): ",
-             (unsigned long)(options->file_size_filter.max_file_size/1024));
-  } else {
-    snprintf(prompt_text, sizeof(prompt_text), "File size range (e.g. 100k-2m or 100k- or -2m): ");
+  /* Prepare current value and prompt */
+  switch(field_num) {
+    case 1: /* min file size */
+      format_filesize_input(filter->min_file_size, current_value, sizeof(current_value));
+      snprintf(prompt, sizeof(prompt), "Min file size (e.g. 100k, 2m): ");
+      break;
+    case 2: /* max file size */
+      format_filesize_input(filter->max_file_size, current_value, sizeof(current_value));
+      snprintf(prompt, sizeof(prompt), "Max file size (e.g. 2m, 1g): ");
+      break;
+    default:
+      return;
   }
 
-  /* Ask for input */
+  /* Show input dialog */
   aff_copy(stdscr);
+  wmove(stdscr, LINES/2-1, 0);
+  wprintw(stdscr, "%s", prompt);
   wmove(stdscr, LINES/2, 0);
-  wprintw(stdscr, "%s", prompt_text);
+  wprintw(stdscr, "Current: %s", strlen(current_value) > 0 ? current_value : "none");
+  wmove(stdscr, LINES/2+1, 0);
+  wprintw(stdscr, "New value (empty to clear, Esc to cancel): ");
   wrefresh(stdscr);
 
-  /* Get user input */
+  input[0] = '\0';
+  wmove(stdscr, LINES/2+1, prompt_len);
+  wrefresh(stdscr);
+
   echo();
-  wgetnstr(stdscr, input, sizeof(input)-1);
-  noecho();
+  while (1) {
+    ch = wgetch(stdscr);
 
-  /* Parse input like "100k-2m" or "100k-" or "-2m" */
-  if (strlen(input) > 0) {
-    char *ptr = input;
-    /* Clear current file size settings */
-    options->file_size_filter.min_file_size = 0;
-    options->file_size_filter.max_file_size = 0;
-
-    /* Check for leading dash (only max) */
-    if(*ptr == '-') {
-      ptr++;
-      options->file_size_filter.max_file_size = parse_size_with_units(&ptr);
-    } else {
-      /* Parse min value */
-      options->file_size_filter.min_file_size = parse_size_with_units(&ptr);
-      /* Check for range separator */
-      if(*ptr == '-') {
-        ptr++;
-        /* Check if there's a max value after dash */
-        if(*ptr && *ptr != ',' && *ptr != '\0') {
-          options->file_size_filter.max_file_size = parse_size_with_units(&ptr);
-        }
-      }
-    }
-    /* Validate max_file_size >= 1KB for optimal performance */
-    if(options->file_size_filter.max_file_size > 0 && options->file_size_filter.max_file_size < 1024) {
-      wprintw(stdscr, "\nERROR: File size max limit must be at least 1KB (you entered %llu bytes)\n",
-              (unsigned long long)options->file_size_filter.max_file_size);
-      wprintw(stdscr, "Small max limits cause suboptimal performance due to excessive file I/O overhead.\n");
-      wprintw(stdscr, "Press any key to continue...");
-      wrefresh(stdscr);
-      wgetch(stdscr);
-      options->file_size_filter.min_file_size = 0;
-      options->file_size_filter.max_file_size = 0;
+    if (ch == key_ESC) {
+      noecho();
       return;
     }
-    /* Validate min <= max */
-    if(options->file_size_filter.min_file_size > 0 &&
-       options->file_size_filter.max_file_size > 0 &&
-       options->file_size_filter.min_file_size > options->file_size_filter.max_file_size) {
-      options->file_size_filter.min_file_size = 0;
-      options->file_size_filter.max_file_size = 0;
+    else if (ch == '\n' || ch == '\r') {
+      break;
+    }
+    else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+      if (input_pos > 0) {
+        input_pos--;
+        input[input_pos] = '\0';
+        wmove(stdscr, LINES/2+1, prompt_len + input_pos);
+        waddch(stdscr, ' ');
+        wmove(stdscr, LINES/2+1, prompt_len + input_pos);
+        wrefresh(stdscr);
+      }
+    }
+    else if (ch >= 32 && ch <= 126 && input_pos < (int)sizeof(input)-2) {
+      input[input_pos] = ch;
+      input_pos++;
+      input[input_pos] = '\0';
+      wmove(stdscr, LINES/2+1, prompt_len + input_pos - 1);
+      waddch(stdscr, ch);
+      wrefresh(stdscr);
+    }
+  }
+  noecho();
+
+  /* Parse and apply input */
+  if (strlen(input) > 0) {
+    char *ptr = input;
+    uint64_t val = parse_size_with_units(&ptr);
+
+    switch(field_num) {
+      case 1: /* min file size */
+        filter->min_file_size = val;
+        break;
+      case 2: /* max file size */
+        /* Validate max_file_size >= 1KB for optimal performance */
+        if(val > 0 && val < 1024) {
+          aff_copy(stdscr);
+          wmove(stdscr, LINES/2, 0);
+          wprintw(stdscr, "ERROR: Max file size must be at least 1KB\n");
+          wprintw(stdscr, "Press any key to continue...");
+          wrefresh(stdscr);
+          wgetch(stdscr);
+          return;
+        }
+        filter->max_file_size = val;
+        break;
+    }
+  } else {
+    /* Empty input - clear the field */
+    switch(field_num) {
+      case 1:
+        filter->min_file_size = 0;
+        break;
+      case 2:
+        filter->max_file_size = 0;
+        break;
+    }
+  }
+
+  /* Adjust max to equal min if min > max */
+  if(filter->min_file_size > 0 && filter->max_file_size > 0 &&
+     filter->min_file_size > filter->max_file_size) {
+    filter->max_file_size = filter->min_file_size;
+  }
+}
+
+static void interface_filesize_photorec_ncurses(struct ph_options *options)
+{
+  int field_selected = 1;  /* 1=min, 2=max */
+
+  while (1)
+  {
+    int key;
+    char min_str[32] = "";
+    char max_str[32] = "";
+
+    /* Format current values */
+    format_filesize_input(options->file_size_filter.min_file_size, min_str, sizeof(min_str));
+    format_filesize_input(options->file_size_filter.max_file_size, max_str, sizeof(max_str));
+
+    /* Display interface */
+    aff_copy(stdscr);
+    wmove(stdscr, 4, 0);
+    wprintw(stdscr, "File size filters\n");
+    wmove(stdscr, 5, 0);
+    wprintw(stdscr, "Note: These filters apply to all file types\n");
+
+    /* Empty line */
+    wmove(stdscr, 7, 0);
+    wprintw(stdscr, "\n");
+
+    /* Header row */
+    wmove(stdscr, 8, 0);
+    wprintw(stdscr, "                           min            max");
+
+    /* File size row */
+    wmove(stdscr, 9, 0);
+    wprintw(stdscr, "File size:                 ");
+    if (field_selected == 1) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[%-10s]", strlen(min_str) > 0 ? min_str : " disabled");
+    if (field_selected == 1) wattroff(stdscr, A_REVERSE);
+    wprintw(stdscr, " - ");
+    if (field_selected == 2) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[%-10s]", strlen(max_str) > 0 ? max_str : " disabled");
+    if (field_selected == 2) wattroff(stdscr, A_REVERSE);
+
+    wmove(stdscr, 12, 0);
+    wprintw(stdscr, "Use Arrow keys to select field, Enter to edit, 'c' to clear, 'q' to quit");
+
+    wrefresh(stdscr);
+
+    /* Handle input */
+    key = wgetch(stdscr);
+    switch(key)
+    {
+      case KEY_LEFT:
+        if (field_selected == 2) field_selected = 1;
+        break;
+      case KEY_RIGHT:
+        if (field_selected == 1) field_selected = 2;
+        break;
+      case '\n':
+      case '\r':
+      case KEY_ENTER:
+        if (field_selected >= 1 && field_selected <= 2) {
+          interface_edit_filesize_field(&options->file_size_filter, field_selected);
+        }
+        break;
+      case 'c':
+      case 'C':
+        /* Clear all file size filters */
+        options->file_size_filter.min_file_size = 0;
+        options->file_size_filter.max_file_size = 0;
+        field_selected = 1;
+        break;
+      case key_ESC:
+      case 'q':
+      case 'Q':
+        return;
     }
   }
 }
 
 void interface_imagesize_photorec_ncurses(struct ph_options *options)
 {
-  char input[64];
-  char prompt_text[128];
+  int field_selected = 1;  /* 1=width_min, 2=width_max, 3=height_min, 4=height_max, 5=pixels_min, 6=pixels_max */
 
-  /* Show current values */
-  if (options->image_filter.min_pixels > 0 && options->image_filter.max_pixels > 0) {
-    snprintf(prompt_text, sizeof(prompt_text), "Image size range (current: %lu-%lu pixels): ",
-             (unsigned long)options->image_filter.min_pixels, (unsigned long)options->image_filter.max_pixels);
-  } else if (options->image_filter.min_width > 0 || options->image_filter.min_height > 0) {
-    snprintf(prompt_text, sizeof(prompt_text), "Image size range (current: %ux%u-): ",
-             options->image_filter.min_width, options->image_filter.min_height);
-  } else {
-    snprintf(prompt_text, sizeof(prompt_text), "Image dimensions (e.g. width,800-1920,height,600-1080): ");
-  }
+  while (1)
+  {
+    int key;
+    char width_min_str[16] = "";
+    char width_max_str[16] = "";
+    char height_min_str[16] = "";
+    char height_max_str[16] = "";
+    char pixels_min_str[32] = "";
+    char pixels_max_str[32] = "";
 
-  /* Ask for input */
-  aff_copy(stdscr);
-  wmove(stdscr, LINES/2, 0);
-  wprintw(stdscr, "%s", prompt_text);
-  wrefresh(stdscr);
+    /* Check which fields should be disabled based on specific values set */
+    int pixels_min_active = (options->image_filter.min_pixels > 0);
+    int pixels_max_active = (options->image_filter.max_pixels > 0);
+    int dimensions_min_active = (options->image_filter.min_width > 0 || options->image_filter.min_height > 0);
+    int dimensions_max_active = (options->image_filter.max_width > 0 || options->image_filter.max_height > 0);
 
-  /* Get user input */
-  echo();
-  wgetnstr(stdscr, input, sizeof(input)-1);
-  noecho();
+    /* Width strings */
+    if (options->image_filter.min_width > 0) {
+      snprintf(width_min_str, sizeof(width_min_str), "%u", options->image_filter.min_width);
+    }
+    if (options->image_filter.max_width > 0) {
+      snprintf(width_max_str, sizeof(width_max_str), "%u", options->image_filter.max_width);
+    }
 
-  /* Parse input */
-  if (strlen(input) > 0) {
-    char *cmd_ptr = input;
+    /* Height strings */
+    if (options->image_filter.min_height > 0) {
+      snprintf(height_min_str, sizeof(height_min_str), "%u", options->image_filter.min_height);
+    }
+    if (options->image_filter.max_height > 0) {
+      snprintf(height_max_str, sizeof(height_max_str), "%u", options->image_filter.max_height);
+    }
 
-    /* Clear current image size settings */
-    options->image_filter.min_pixels = 0;
-    options->image_filter.max_pixels = 0;
-    options->image_filter.min_width = 0;
-    options->image_filter.max_width = 0;
-    options->image_filter.min_height = 0;
-    options->image_filter.max_height = 0;
+    /* Pixels strings - show exactly what user entered */
+    if (options->image_filter.min_pixels > 0) {
+      if (strlen(pixels_min_format) > 0) {
+        snprintf(pixels_min_str, sizeof(pixels_min_str), "%s", pixels_min_format);
+      } else {
+        /* Fallback - show as plain number */
+        snprintf(pixels_min_str, sizeof(pixels_min_str), "%lu", (unsigned long)options->image_filter.min_pixels);
+      }
+    }
+    if (options->image_filter.max_pixels > 0) {
+      if (strlen(pixels_max_format) > 0) {
+        snprintf(pixels_max_str, sizeof(pixels_max_str), "%s", pixels_max_format);
+      } else {
+        /* Fallback - show as plain number */
+        snprintf(pixels_max_str, sizeof(pixels_max_str), "%lu", (unsigned long)options->image_filter.max_pixels);
+      }
+    }
 
-    /* Parse using existing function */
-    change_imagesize_cli(&cmd_ptr, &options->image_filter);
+    /* Display interface */
+    aff_copy(stdscr);
+    wmove(stdscr, 4, 0);
+    wprintw(stdscr, "Image size filters : %s\n", has_any_image_size_filter(&options->image_filter) ? "Enabled" : "Disabled");
+    wmove(stdscr, 5, 0);
+    wprintw(stdscr, "Note: These filters apply only to JPG and PNG files\n");
+
+    /* Empty line */
+    wmove(stdscr, 7, 0);
+    wprintw(stdscr, "\n");
+
+    /* Header row */
+    wmove(stdscr, 8, 0);
+    wprintw(stdscr, "                           min            max");
+
+    /* Width row */
+    wmove(stdscr, 9, 0);
+    wprintw(stdscr, "Width (pixels):            ");
+    if (pixels_min_active) wattron(stdscr, A_DIM);
+    if (field_selected == 1) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[%-10s]", strlen(width_min_str) > 0 ? width_min_str : " disabled");
+    if (field_selected == 1) wattroff(stdscr, A_REVERSE);
+    if (pixels_min_active) wattroff(stdscr, A_DIM);
+    wprintw(stdscr, " - ");
+    if (pixels_max_active) wattron(stdscr, A_DIM);
+    if (field_selected == 2) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[%-10s]", strlen(width_max_str) > 0 ? width_max_str : " disabled");
+    if (field_selected == 2) wattroff(stdscr, A_REVERSE);
+    if (pixels_max_active) wattroff(stdscr, A_DIM);
+
+    /* Height row */
+    wmove(stdscr, 10, 0);
+    wprintw(stdscr, "Height (pixels):           ");
+    if (pixels_min_active) wattron(stdscr, A_DIM);
+    if (field_selected == 3) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[%-10s]", strlen(height_min_str) > 0 ? height_min_str : " disabled");
+    if (field_selected == 3) wattroff(stdscr, A_REVERSE);
+    if (pixels_min_active) wattroff(stdscr, A_DIM);
+    wprintw(stdscr, " - ");
+    if (pixels_max_active) wattron(stdscr, A_DIM);
+    if (field_selected == 4) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[%-10s]", strlen(height_max_str) > 0 ? height_max_str : " disabled");
+    if (field_selected == 4) wattroff(stdscr, A_REVERSE);
+    if (pixels_max_active) wattroff(stdscr, A_DIM);
+
+    /* Resolution row */
+    wmove(stdscr, 11, 0);
+    wprintw(stdscr, "Resolution (WIDTHxHEIGHT): ");
+    if (dimensions_min_active) wattron(stdscr, A_DIM);
+    if (field_selected == 5) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[%-10s]", strlen(pixels_min_str) > 0 ? pixels_min_str : " disabled");
+    if (field_selected == 5) wattroff(stdscr, A_REVERSE);
+    if (dimensions_min_active) wattroff(stdscr, A_DIM);
+    wprintw(stdscr, " - ");
+    if (dimensions_max_active) wattron(stdscr, A_DIM);
+    if (field_selected == 6) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[%-10s]", strlen(pixels_max_str) > 0 ? pixels_max_str : " disabled");
+    if (field_selected == 6) wattroff(stdscr, A_REVERSE);
+    if (dimensions_max_active) wattroff(stdscr, A_DIM);
+
+    /* Presets section */
+    wmove(stdscr, 13, 0);
+    wprintw(stdscr, "\nQuick presets (min resolution):");
+    wmove(stdscr, 15, 0);
+    if (field_selected == 7) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[1] VGA (640x480)");
+    if (field_selected == 7) wattroff(stdscr, A_REVERSE);
+    wprintw(stdscr, "  ");
+    if (field_selected == 8) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[2] HD (1280x720)");
+    if (field_selected == 8) wattroff(stdscr, A_REVERSE);
+    wprintw(stdscr, "  ");
+    if (field_selected == 9) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[3] FullHD (1920x1080)");
+    if (field_selected == 9) wattroff(stdscr, A_REVERSE);
+    wmove(stdscr, 16, 0);
+    if (field_selected == 10) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[4] 2K (2560x1440)");
+    if (field_selected == 10) wattroff(stdscr, A_REVERSE);
+    wprintw(stdscr, "  ");
+    if (field_selected == 11) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[5] 4K (3840x2160)");
+    if (field_selected == 11) wattroff(stdscr, A_REVERSE);
+    wprintw(stdscr, "  ");
+    if (field_selected == 12) wattron(stdscr, A_REVERSE);
+    wprintw(stdscr, "[6] 8K (7680x4320)");
+    if (field_selected == 12) wattroff(stdscr, A_REVERSE);
+
+    wmove(stdscr, 18, 0);
+    wprintw(stdscr, "Use Arrow keys, Enter to edit/apply preset, 'c' to clear, 'q' to quit");
+
+    wrefresh(stdscr);
+
+    /* Handle input */
+    key = wgetch(stdscr);
+    switch(key)
+    {
+      case KEY_UP:
+        if (field_selected > 9) field_selected -= 3; /* Presets row */
+        else if (field_selected >= 7 && field_selected <= 9) field_selected = 1; /* From presets to fields */
+        else if (field_selected > 2) field_selected -= 2;
+        break;
+      case KEY_DOWN:
+        if (field_selected <= 4) field_selected += 2;
+        else if (field_selected <= 6) field_selected = 7; /* To presets */
+        else if (field_selected <= 8) field_selected += 3;
+        break;
+      case KEY_LEFT:
+        if (field_selected >= 7 && field_selected <= 12) {
+          /* Navigate presets */
+          if (field_selected > 7) field_selected -= 1;
+        } else if (field_selected % 2 == 0 && field_selected > 1) {
+          field_selected -= 1;
+        }
+        break;
+      case KEY_RIGHT:
+        if (field_selected >= 7 && field_selected <= 12) {
+          /* Navigate presets */
+          if (field_selected < 12) field_selected += 1;
+        } else if (field_selected % 2 == 1 && field_selected < 6) {
+          field_selected += 1;
+        }
+        break;
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6':
+        /* Quick preset selection by number key */
+        field_selected = 6 + (key - '0');
+        /* Fall through to apply preset */
+      case '\n':
+      case '\r':
+      case KEY_ENTER:
+        if (field_selected >= 1 && field_selected <= 6) {
+          /* Check if field is disabled before allowing edit */
+          int can_edit = 1;
+          if ((field_selected == 1 || field_selected == 3) && pixels_min_active) can_edit = 0;
+          if ((field_selected == 2 || field_selected == 4) && pixels_max_active) can_edit = 0;
+          if (field_selected == 5 && dimensions_min_active) can_edit = 0;
+          if (field_selected == 6 && dimensions_max_active) can_edit = 0;
+
+          if (can_edit) {
+            interface_edit_image_filter_field(&options->image_filter, field_selected);
+          }
+        } else if (field_selected >= 7 && field_selected <= 12) {
+          /* Apply preset */
+          options->image_filter.min_pixels = 0;
+          options->image_filter.max_pixels = 0;
+          pixels_min_format[0] = '\0';
+          pixels_max_format[0] = '\0';
+
+          switch(field_selected) {
+            case 7: /* VGA 640x480 */
+              options->image_filter.min_width = 640;
+              options->image_filter.min_height = 480;
+              break;
+            case 8: /* HD 1280x720 */
+              options->image_filter.min_width = 1280;
+              options->image_filter.min_height = 720;
+              break;
+            case 9: /* FullHD 1920x1080 */
+              options->image_filter.min_width = 1920;
+              options->image_filter.min_height = 1080;
+              break;
+            case 10: /* 2K 2560x1440 */
+              options->image_filter.min_width = 2560;
+              options->image_filter.min_height = 1440;
+              break;
+            case 11: /* 4K 3840x2160 */
+              options->image_filter.min_width = 3840;
+              options->image_filter.min_height = 2160;
+              break;
+            case 12: /* 8K 7680x4320 */
+              options->image_filter.min_width = 7680;
+              options->image_filter.min_height = 4320;
+              break;
+          }
+        }
+        break;
+      case 'c':
+      case 'C':
+        /* Clear all image dimension filters (keep file size intact) */
+        options->image_filter.min_pixels = 0;
+        options->image_filter.max_pixels = 0;
+        options->image_filter.min_width = 0;
+        options->image_filter.max_width = 0;
+        options->image_filter.min_height = 0;
+        options->image_filter.max_height = 0;
+        pixels_min_format[0] = '\0';
+        pixels_max_format[0] = '\0';
+        field_selected = 1;
+        break;
+      case key_ESC:
+      case 'q':
+      case 'Q':
+        return;
+    }
   }
 }
 
