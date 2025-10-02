@@ -1220,202 +1220,106 @@ time_t get_time_from_YYYYMMDD_HHMMSS(const char *date_asc)
   return mktime(&tm_time);
 }
 
-// Buffer pool for reusing memory buffers to avoid calloc/free overhead
-#define BUFFER_POOL_MAX_SIZE 1000
-static struct {
-  unsigned char *buffers[BUFFER_POOL_MAX_SIZE];
-  uint64_t buffer_sizes[BUFFER_POOL_MAX_SIZE];
-  int count;
-} buffer_pool = {.count = 0};
-
-static void log_buffer_pool_state(void)
+// Get max file size for this file type
+static uint64_t get_max_filesize_for_buffer(file_recovery_t *file_recovery)
 {
-  // Remove verbose logging - only log on errors
-}
-
-static unsigned char* buffer_pool_acquire(uint64_t size)
-{
-  // Try to reuse a buffer from pool with matching size
-  for(int i = 0; i < buffer_pool.count; i++) {
-    if(buffer_pool.buffer_sizes[i] == size) {
-      unsigned char *buf = buffer_pool.buffers[i];
-      // Remove from pool by shifting remaining elements
-      for(int j = i; j < buffer_pool.count - 1; j++) {
-        buffer_pool.buffers[j] = buffer_pool.buffers[j + 1];
-        buffer_pool.buffer_sizes[j] = buffer_pool.buffer_sizes[j + 1];
-      }
-      buffer_pool.count--;
-      // Don't clear - buffer will be overwritten anyway
-      return buf;
-    }
-  }
-
-  // No buffer available, allocate new one
-  return (unsigned char*)calloc(size, 1);
-}
-
-static void buffer_pool_release(unsigned char *buffer, uint64_t size)
-{
-  if(buffer == NULL)
-    return;
-
-  // Return to pool if not full
-  if(buffer_pool.count < BUFFER_POOL_MAX_SIZE) {
-    buffer_pool.buffers[buffer_pool.count] = buffer;
-    buffer_pool.buffer_sizes[buffer_pool.count] = size;
-    buffer_pool.count++;
-  } else {
-    // Pool full, just free it
-    free(buffer);
-  }
-}
-
-static uint64_t calculate_max_buffer_size(file_recovery_t *file_recovery)
-{
-  uint64_t max_size = 0;
-
   if(file_recovery->file_stat && file_recovery->file_stat->file_hint &&
      file_recovery->file_stat->file_hint->max_filesize > 0) {
-    max_size = file_recovery->file_stat->file_hint->max_filesize;
+    return file_recovery->file_stat->file_hint->max_filesize;
   }
-
-  // For images with image_filter, don't use filesize_filter for buffer size
-  // Image filter uses its own size limits and overflow handling
-  //if(!(file_recovery->image_filter && file_recovery->file_stat &&
-  //     file_recovery->file_stat->file_hint && file_recovery->file_stat->file_hint->is_image)) {
-  //  if(file_recovery->file_size_filter && file_recovery->file_size_filter->max_file_size > 0) {
-  //    if(max_size == 0 || file_recovery->file_size_filter->max_file_size < max_size) {
-  //      max_size = file_recovery->file_size_filter->max_file_size;
-  //    }
-  //  }
-  //}
-
-  // Limit memory buffer to reasonable size (50MB) to avoid allocation failures
-  const uint64_t MAX_MEMORY_BUFFER = 50 * 1024 * 1024; // 50MB
-  if(max_size == 0 || max_size > MAX_MEMORY_BUFFER) {
-    max_size = MAX_MEMORY_BUFFER;
-  }
-
-  return max_size;
+  return PHOTOREC_MAX_FILE_SIZE; // Global default
 }
 
-//int init_memory_buffer(file_recovery_t *file_recovery)
-//{
-//  if(!file_recovery->use_memory_buffering) {
-//    return 0;
-//  }
-//
-//  file_recovery->buffer_max_size = calculate_max_buffer_size(file_recovery);
-//  if(file_recovery->buffer_max_size == 0) {
-//    return 0;
-//  }
-//
-//  file_recovery->memory_buffer = buffer_pool_acquire(file_recovery->buffer_max_size);
-//  if(file_recovery->memory_buffer == NULL) {
-//    file_recovery->use_memory_buffering = 0;
-//    return -1;
-//  }
-//
-//  file_recovery->buffer_size = 0;
-//  return 0;
-//}
+// Memory buffer for each file recovery with hash table lookup
+#define MAX_FILE_BUFFERS 100
+#define HASH_TABLE_SIZE 211 // Prime number for better distribution
 
-//int append_to_memory_buffer(file_recovery_t *file_recovery, const unsigned char *data, size_t size)
-//{
-//  if(!file_recovery->use_memory_buffering || !file_recovery->memory_buffer) {
-//    return -1;
-//  }
-//
-//  if(file_recovery->buffer_size + size > file_recovery->buffer_max_size) {
-//    free_memory_buffer(file_recovery);
-//    return -2;
-//  }
-//
-//  memcpy(file_recovery->memory_buffer + file_recovery->buffer_size, data, size);
-//  file_recovery->buffer_size += size;
-//  return 0;
-//}
+// Statistics for monitoring buffer vs disk usage
+static struct {
+    unsigned long buffer_writes;      // Successful buffer writes
+    unsigned long disk_fallback_full; // Fallback due to buffer pool full
+    unsigned long disk_fallback_size; // Fallback due to file too large
+    unsigned long disk_fallback_oom;  // Fallback due to malloc/realloc failure
+} buffer_stats = {0, 0, 0, 0};
 
-//int flush_memory_buffer_to_file(file_recovery_t *file_recovery)
-//{
-//  if(!file_recovery->memory_buffer || file_recovery->buffer_size == 0) {
-//    return 0;
-//  }
-//
-//  if(file_recovery->handle == NULL) {
-//    file_recovery->handle = fopen(file_recovery->filename, "w+b");
-//    if(file_recovery->handle == NULL) {
-//      return -1;
-//    }
-//  }
-//
-//  if(fwrite(file_recovery->memory_buffer, file_recovery->buffer_size, 1, file_recovery->handle) < 1) {
-//    return -1;
-//  }
-//
-//  if(fflush(file_recovery->handle) != 0) {
-//    return -1;
-//  }
-//
-//  // Don't close the file handle - let PhotoRec handle that later
-//  // PhotoRec needs handle to be non-NULL to call file_finish_aux() which registers files as recovered
-//
-//  file_recovery->file_size = file_recovery->buffer_size;
-//  free_memory_buffer(file_recovery);
-//  return 0;
-//}
-
-//void free_memory_buffer(file_recovery_t *file_recovery)
-//{
-//  if(file_recovery) {
-//    // Return buffer to pool instead of freeing
-//    if(file_recovery->use_memory_buffering == 1 && file_recovery->memory_buffer) {
-//      buffer_pool_release(file_recovery->memory_buffer, file_recovery->buffer_max_size);
-//    }
-//    file_recovery->memory_buffer = NULL;
-//    file_recovery->buffer_size = 0;
-//    file_recovery->buffer_max_size = 0;
-//    file_recovery->use_memory_buffering = 0;
-//  }
-//}
-
-// Memory buffer for each file recovery
 static struct {
     char filename[256];  // Use filename as key instead of pointer
     unsigned char *buffer;
     size_t buffer_size;
     size_t buffer_capacity;
-} file_buffers[100];
+    int next_index; // For collision chaining, -1 means end of chain
+} file_buffers[MAX_FILE_BUFFERS];
+
+static int hash_table[HASH_TABLE_SIZE]; // Index into file_buffers, -1 means empty
 static int buffer_count = 0;
+
+// Simple hash function for filenames
+static int hash_filename(const char *filename) {
+    unsigned int hash = 5381;
+    const char *c = filename;
+    while (*c) {
+        hash = ((hash << 5) + hash) + (unsigned char)*c; // hash * 33 + c
+        c++;
+    }
+    return hash % HASH_TABLE_SIZE;
+}
+
+// Initialize hash table (call once at startup)
+static void init_buffer_hash_table(void) {
+    static int initialized = 0;
+    if (!initialized) {
+        for (int i = 0; i < HASH_TABLE_SIZE; i++) {
+            hash_table[i] = -1;
+        }
+        for (int i = 0; i < MAX_FILE_BUFFERS; i++) {
+            file_buffers[i].next_index = -1;
+        }
+        initialized = 1;
+    }
+}
 
 // Find or create buffer for file
 static int get_buffer_index(file_recovery_t *file_recovery)
 {
-    int i;
+    init_buffer_hash_table();
 
-    // Find existing buffer by filename
-    for (i = 0; i < buffer_count; i++) {
-        if (strcmp(file_buffers[i].filename, file_recovery->filename) == 0) {
-            return i;
+    int hash = hash_filename(file_recovery->filename);
+    int idx = hash_table[hash];
+
+    // Search collision chain
+    while (idx != -1) {
+        if (strcmp(file_buffers[idx].filename, file_recovery->filename) == 0) {
+            return idx;
         }
+        idx = file_buffers[idx].next_index;
     }
 
     // Create new buffer
-    if (buffer_count >= 100) {
+    if (buffer_count >= MAX_FILE_BUFFERS) {
         return -1; // Too many buffers
     }
 
-    i = buffer_count++;
+    int i = buffer_count++;
     strncpy(file_buffers[i].filename, file_recovery->filename, sizeof(file_buffers[i].filename) - 1);
     file_buffers[i].filename[sizeof(file_buffers[i].filename) - 1] = '\0';
-    file_buffers[i].buffer = malloc(1024 * 1024); // 1MB initial
+
+    // Smart initial allocation based on file type
+    uint64_t max_filesize = get_max_filesize_for_buffer(file_recovery);
+    size_t initial_size = (max_filesize > 1024*1024) ? 1024*1024 : (size_t)max_filesize; // Start with 1MB or file max, whichever is smaller
+
+    file_buffers[i].buffer = malloc(initial_size);
     file_buffers[i].buffer_size = 0;
-    file_buffers[i].buffer_capacity = 1024 * 1024;
+    file_buffers[i].buffer_capacity = initial_size;
+    file_buffers[i].next_index = -1;
 
     if (!file_buffers[i].buffer) {
         buffer_count--;
         return -1;
     }
+
+    // Add to hash table (insert at head of collision chain)
+    file_buffers[i].next_index = hash_table[hash];
+    hash_table[hash] = i;
 
     return i;
 }
@@ -1425,14 +1329,6 @@ int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t s
 {
     int idx;
 
-    // Simple debug - always write to file
-    FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
-    if (debug_log) {
-        fprintf(debug_log, "DEBUG: file_buffer_write called with %zu bytes for %s (file_recovery=%p)\n",
-               size, file_recovery ? file_recovery->filename : "NULL", (void*)file_recovery);
-        fclose(debug_log);
-    }
-
     if (!file_recovery || !data || size == 0) {
         return -1;
     }
@@ -1440,18 +1336,36 @@ int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t s
     idx = get_buffer_index(file_recovery);
     if (idx < 0) {
         // Fallback to direct write if buffer fails
-        printf("FALLBACK: Buffer failed, writing %zu bytes DIRECTLY to disk for %s\n",
-               size, file_recovery->filename);
+        buffer_stats.disk_fallback_full++;
         if (!file_recovery->handle) return -1;
         return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
     }
 
-    // Expand buffer if needed
+    // Check if we exceed max file size for this file type
+    uint64_t max_filesize = get_max_filesize_for_buffer(file_recovery);
+    if (file_buffers[idx].buffer_size + size > max_filesize) {
+        // File too large for buffer, fallback to direct write
+        buffer_stats.disk_fallback_size++;
+        if (!file_recovery->handle) return -1;
+        return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
+    }
+
+    // Expand buffer if needed with smarter allocation strategy
     if (file_buffers[idx].buffer_size + size > file_buffers[idx].buffer_capacity) {
-        size_t new_capacity = (file_buffers[idx].buffer_size + size) * 2;
+        // Instead of doubling, grow by chunks but respect max_filesize
+        size_t chunk_size = (max_filesize > 10*1024*1024) ? 1024*1024 : max_filesize/4; // 1MB or 25% of max
+        size_t needed = file_buffers[idx].buffer_size + size;
+        size_t new_capacity = ((needed + chunk_size - 1) / chunk_size) * chunk_size; // Round up to chunk boundary
+
+        // Cap at max_filesize
+        if (new_capacity > max_filesize) {
+            new_capacity = max_filesize;
+        }
+
         unsigned char *new_buffer = realloc(file_buffers[idx].buffer, new_capacity);
         if (!new_buffer) {
             // Fallback to direct write
+            buffer_stats.disk_fallback_oom++;
             if (!file_recovery->handle) return -1;
             return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
         }
@@ -1464,40 +1378,73 @@ int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t s
     file_buffers[idx].buffer_size += size;
 
     // NOTE: file_size is already updated by PhotoRec in phbf.c, don't double-update
+    buffer_stats.buffer_writes++;
 
-    // PROOF: Log that we're buffering, NOT writing to disk
-    FILE *proof_log = fopen("/home/piotr/buffer_proof.log", "a");
-    if (proof_log) {
-        fprintf(proof_log, "BUFFER: Added %zu bytes to memory buffer for file %s (total buffered: %zu bytes) - first 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-               size, file_recovery->filename, file_buffers[idx].buffer_size,
-               size >= 1 ? ((unsigned char*)data)[0] : 0,
-               size >= 2 ? ((unsigned char*)data)[1] : 0,
-               size >= 3 ? ((unsigned char*)data)[2] : 0,
-               size >= 4 ? ((unsigned char*)data)[3] : 0,
-               size >= 5 ? ((unsigned char*)data)[4] : 0,
-               size >= 6 ? ((unsigned char*)data)[5] : 0,
-               size >= 7 ? ((unsigned char*)data)[6] : 0,
-               size >= 8 ? ((unsigned char*)data)[7] : 0);
-        fclose(proof_log);
-    }
+    // Log stats periodically
+    print_buffer_statistics();
 
     return 0;
+}
+
+// Print buffer statistics as JSON to log file
+void print_buffer_statistics(void)
+{
+    static time_t last_log_time = 0;
+    time_t current_time = time(NULL);
+
+    // Log every 5 seconds
+    if (current_time - last_log_time < 5) {
+        return;
+    }
+    last_log_time = current_time;
+
+    unsigned long total_writes = buffer_stats.buffer_writes +
+                                buffer_stats.disk_fallback_full +
+                                buffer_stats.disk_fallback_size +
+                                buffer_stats.disk_fallback_oom;
+
+    if (total_writes > 0) {
+        FILE *log_file = fopen("/home/piotr/buffer_stats.json", "a");
+        if (log_file) {
+            fprintf(log_file,
+                "{\"timestamp\":%ld,"
+                "\"buffer_writes\":%lu,"
+                "\"disk_fallback_full\":%lu,"
+                "\"disk_fallback_size\":%lu,"
+                "\"disk_fallback_oom\":%lu,"
+                "\"total_writes\":%lu,"
+                "\"buffer_rate\":%.1f}\n",
+                current_time,
+                buffer_stats.buffer_writes,
+                buffer_stats.disk_fallback_full,
+                buffer_stats.disk_fallback_size,
+                buffer_stats.disk_fallback_oom,
+                total_writes,
+                (buffer_stats.buffer_writes * 100.0) / total_writes);
+            fclose(log_file);
+        }
+    }
 }
 
 // Get buffer data for file_check functions to work on memory instead of disk
 const unsigned char* file_buffer_get_data(file_recovery_t *file_recovery, size_t *buffer_size)
 {
-    int i;
-
     if (!file_recovery || !buffer_size) {
         return NULL;
     }
 
-    for (i = 0; i < buffer_count; i++) {
-        if (strcmp(file_buffers[i].filename, file_recovery->filename) == 0) {
-            *buffer_size = file_buffers[i].buffer_size;
-            return (const unsigned char*)file_buffers[i].buffer;
+    init_buffer_hash_table();
+
+    int hash = hash_filename(file_recovery->filename);
+    int idx = hash_table[hash];
+
+    // Search collision chain
+    while (idx != -1) {
+        if (strcmp(file_buffers[idx].filename, file_recovery->filename) == 0) {
+            *buffer_size = file_buffers[idx].buffer_size;
+            return (const unsigned char*)file_buffers[idx].buffer;
         }
+        idx = file_buffers[idx].next_index;
     }
 
     *buffer_size = 0;
@@ -1518,42 +1465,69 @@ int read_file_data_from_buffer(file_recovery_t *file_recovery)
   return 0;
 }
 
+// Remove buffer from hash table (helper function)
+static void remove_buffer_from_hash_table(int buffer_idx) {
+    int hash;
+    int idx, prev_idx;
+
+    // Find and remove from hash table
+    hash = hash_filename(file_buffers[buffer_idx].filename);
+    idx = hash_table[hash];
+    prev_idx = -1;
+
+    while (idx != -1) {
+        if (idx == buffer_idx) {
+            // Found it, remove from chain
+            if (prev_idx == -1) {
+                // It's the head of the chain
+                hash_table[hash] = file_buffers[idx].next_index;
+            } else {
+                // It's in the middle/end of chain
+                file_buffers[prev_idx].next_index = file_buffers[idx].next_index;
+            }
+            break;
+        }
+        prev_idx = idx;
+        idx = file_buffers[idx].next_index;
+    }
+}
+
 // Clear buffer without writing to disk (for discarded files)
 int file_buffer_clear(file_recovery_t *file_recovery)
 {
-    int i;
+    int hash;
+    int idx;
 
-    // Debug: Log that buffer is being cleared
-    FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
-    if (debug_log) {
-        fprintf(debug_log, "DEBUG: file_buffer_clear called for %s\n",
-               file_recovery ? file_recovery->filename : "NULL");
-        fclose(debug_log);
-    }
+    if (!file_recovery) return 0;
 
-    for (i = 0; i < buffer_count; i++) {
-        if (strcmp(file_buffers[i].filename, file_recovery->filename) == 0) {
-            // Free buffer and remove from array without writing to disk
-            free(file_buffers[i].buffer);
-            file_buffers[i].buffer = NULL;
-            file_buffers[i].buffer_size = 0;
-            file_buffers[i].buffer_capacity = 0;
-            file_buffers[i].filename[0] = '\0';
+    init_buffer_hash_table();
+    hash = hash_filename(file_recovery->filename);
+    idx = hash_table[hash];
 
-            // Move last buffer to this position
-            if (i < buffer_count - 1) {
-                file_buffers[i] = file_buffers[buffer_count - 1];
+    // Search collision chain
+    while (idx != -1) {
+        if (strcmp(file_buffers[idx].filename, file_recovery->filename) == 0) {
+            // Found it, remove from hash table first
+            remove_buffer_from_hash_table(idx);
+
+            // Free buffer
+            free(file_buffers[idx].buffer);
+
+            // Move last buffer to this position and update hash table
+            if (idx < buffer_count - 1) {
+                int last_idx = buffer_count - 1;
+                remove_buffer_from_hash_table(last_idx); // Remove old location
+                file_buffers[idx] = file_buffers[last_idx]; // Move
+
+                // Re-insert moved buffer into hash table
+                int moved_hash = hash_filename(file_buffers[idx].filename);
+                file_buffers[idx].next_index = hash_table[moved_hash];
+                hash_table[moved_hash] = idx;
             }
             buffer_count--;
-
-            FILE *proof_log = fopen("/home/piotr/buffer_proof.log", "a");
-            if (proof_log) {
-                fprintf(proof_log, "CLEAR: Buffer cleared for discarded file %s\n",
-                       file_recovery->filename);
-                fclose(proof_log);
-            }
             return 0;
         }
+        idx = file_buffers[idx].next_index;
     }
     return 0; // Buffer not found, already cleared
 }
@@ -1561,49 +1535,45 @@ int file_buffer_clear(file_recovery_t *file_recovery)
 // Flush buffer to disk and free memory
 int file_buffer_flush(file_recovery_t *file_recovery)
 {
-    int i;
+    int hash;
+    int idx;
 
-    // Debug: Log that flush is being called
-    FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
-    if (debug_log) {
-        fprintf(debug_log, "DEBUG: file_buffer_flush called for %s\n",
-               file_recovery ? file_recovery->filename : "NULL");
-        fclose(debug_log);
-    }
+    if (!file_recovery) return 0;
 
-    for (i = 0; i < buffer_count; i++) {
-        if (strcmp(file_buffers[i].filename, file_recovery->filename) == 0) {
-            if (file_recovery->handle && file_buffers[i].buffer_size > 0) {
-                // PROOF: Log actual disk write
-                FILE *proof_log = fopen("/home/piotr/buffer_proof.log", "a");
-                if (proof_log) {
-                    fprintf(proof_log, "FLUSH: Writing %zu bytes from memory buffer to DISK for file %s\n",
-                           file_buffers[i].buffer_size, file_recovery->filename);
-                    fclose(proof_log);
-                }
+    init_buffer_hash_table();
+    hash = hash_filename(file_recovery->filename);
+    idx = hash_table[hash];
 
-                if (fwrite(file_buffers[i].buffer, 1, file_buffers[i].buffer_size,
-                          file_recovery->handle) != file_buffers[i].buffer_size) {
-                    printf("FLUSH: ERROR writing to disk!\n");
+    // Search collision chain
+    while (idx != -1) {
+        if (strcmp(file_buffers[idx].filename, file_recovery->filename) == 0) {
+            // Write to disk if handle available
+            if (file_recovery->handle && file_buffers[idx].buffer_size > 0) {
+                if (fwrite(file_buffers[idx].buffer, 1, file_buffers[idx].buffer_size,
+                          file_recovery->handle) != file_buffers[idx].buffer_size) {
                     return -1;
-                }
-                FILE *proof_log2 = fopen("/home/piotr/buffer_proof.log", "a");
-                if (proof_log2) {
-                    fprintf(proof_log2, "FLUSH: SUCCESS - File %s written to disk\n", file_recovery->filename);
-                    fclose(proof_log2);
                 }
             }
 
-            // Free buffer and remove from array
-            free(file_buffers[i].buffer);
+            // Same cleanup logic as file_buffer_clear
+            remove_buffer_from_hash_table(idx);
+            free(file_buffers[idx].buffer);
 
-            // Shift remaining buffers
-            for (int j = i; j < buffer_count - 1; j++) {
-                file_buffers[j] = file_buffers[j + 1];
+            // Move last buffer to this position and update hash table
+            if (idx < buffer_count - 1) {
+                int last_idx = buffer_count - 1;
+                remove_buffer_from_hash_table(last_idx);
+                file_buffers[idx] = file_buffers[last_idx];
+
+                // Re-insert moved buffer into hash table
+                int moved_hash = hash_filename(file_buffers[idx].filename);
+                file_buffers[idx].next_index = hash_table[moved_hash];
+                hash_table[moved_hash] = idx;
             }
             buffer_count--;
             return 0;
         }
+        idx = file_buffers[idx].next_index;
     }
     return 0; // Buffer not found - OK
 }
