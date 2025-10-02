@@ -1177,6 +1177,7 @@ static void file_rename_zip(file_recovery_t *file_recovery)
   const char *ext=NULL;
   unsigned int file_nbr=0;
   file_recovery_t fr;
+  memset(&fr, 0, sizeof(fr));
   reset_file_recovery(&fr);
   /*@ assert valid_read_string((char*)file_recovery->filename); */
   if((fr.handle=fopen(file_recovery->filename, "rb"))==NULL)

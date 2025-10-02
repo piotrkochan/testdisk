@@ -129,7 +129,7 @@ void file_recovery_aborted(file_recovery_t *file_recovery, struct ph_param *para
   @ ensures  \result == PFSTATUS_BAD || \result == PFSTATUS_OK || \result == PFSTATUS_OK_TRUNCATED;
   @*/
 // ensures  valid_file_recovery(file_recovery);
-pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const struct ph_options *options, alloc_data_t *list_search_space);
+pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, alloc_data_t *list_search_space);
 
 /*@
   @ requires \valid_read(file_stats);

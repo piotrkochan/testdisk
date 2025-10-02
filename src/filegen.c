@@ -494,8 +494,11 @@ void file_check_size_max(file_recovery_t *file_recovery)
 void reset_file_recovery(file_recovery_t *file_recovery)
 {
   // Save filters - they're session config, not per-file state
-  const file_size_filter_t *saved_file_size_filter = file_recovery->file_size_filter;
-  const image_size_filter_t *saved_image_filter = file_recovery->image_filter;
+  //const file_size_filter_t *saved_file_size_filter = file_recovery->file_size_filter;
+  //const image_size_filter_t *saved_image_filter = file_recovery->image_filter;
+
+  // Clear any existing memory buffer for this file
+  file_buffer_clear(file_recovery);
 
   file_recovery->filename[0]='\0';
   file_recovery->time=0;
@@ -512,7 +515,7 @@ void reset_file_recovery(file_recovery_t *file_recovery)
   file_recovery->data_check=NULL;
   file_recovery->file_check=NULL;
   file_recovery->file_rename=NULL;
-  file_recovery->file_check_presave=NULL;
+  //file_recovery->file_check_presave=NULL;
   file_recovery->offset_error=0;
   file_recovery->offset_ok=0;
   file_recovery->checkpoint_status=0;
@@ -520,13 +523,14 @@ void reset_file_recovery(file_recovery_t *file_recovery)
   file_recovery->flags=0;
   file_recovery->extra=0;
   file_recovery->data_check_tmp=0;
-  file_recovery->image_data.width=0;
-  file_recovery->image_data.height=0;
-  free_memory_buffer(file_recovery);
+  //file_recovery->image_data.width=0;
+  //file_recovery->image_data.height=0;
+  // Free memory buffer BEFORE zeroing fields
+  //free_memory_buffer(file_recovery);
 
   // Restore session filters
-  file_recovery->file_size_filter=saved_file_size_filter;
-  file_recovery->image_filter=saved_image_filter;
+  //file_recovery->file_size_filter=saved_file_size_filter;
+  //file_recovery->image_filter=saved_image_filter;
 }
 
 file_stat_t * init_file_stats(file_enable_t *files_enable)
@@ -1217,12 +1221,17 @@ time_t get_time_from_YYYYMMDD_HHMMSS(const char *date_asc)
 }
 
 // Buffer pool for reusing memory buffers to avoid calloc/free overhead
-#define BUFFER_POOL_MAX_SIZE 200
+#define BUFFER_POOL_MAX_SIZE 1000
 static struct {
   unsigned char *buffers[BUFFER_POOL_MAX_SIZE];
   uint64_t buffer_sizes[BUFFER_POOL_MAX_SIZE];
   int count;
 } buffer_pool = {.count = 0};
+
+static void log_buffer_pool_state(void)
+{
+  // Remove verbose logging - only log on errors
+}
 
 static unsigned char* buffer_pool_acquire(uint64_t size)
 {
@@ -1272,17 +1281,17 @@ static uint64_t calculate_max_buffer_size(file_recovery_t *file_recovery)
 
   // For images with image_filter, don't use filesize_filter for buffer size
   // Image filter uses its own size limits and overflow handling
-  if(!(file_recovery->image_filter && file_recovery->file_stat &&
-       file_recovery->file_stat->file_hint && file_recovery->file_stat->file_hint->is_image)) {
-    if(file_recovery->file_size_filter && file_recovery->file_size_filter->max_file_size > 0) {
-      if(max_size == 0 || file_recovery->file_size_filter->max_file_size < max_size) {
-        max_size = file_recovery->file_size_filter->max_file_size;
-      }
-    }
-  }
+  //if(!(file_recovery->image_filter && file_recovery->file_stat &&
+  //     file_recovery->file_stat->file_hint && file_recovery->file_stat->file_hint->is_image)) {
+  //  if(file_recovery->file_size_filter && file_recovery->file_size_filter->max_file_size > 0) {
+  //    if(max_size == 0 || file_recovery->file_size_filter->max_file_size < max_size) {
+  //      max_size = file_recovery->file_size_filter->max_file_size;
+  //    }
+  //  }
+  //}
 
-  // Limit memory buffer to reasonable size (100MB) to avoid allocation failures
-  const uint64_t MAX_MEMORY_BUFFER = 100 * 1024 * 1024; // 100MB
+  // Limit memory buffer to reasonable size (50MB) to avoid allocation failures
+  const uint64_t MAX_MEMORY_BUFFER = 50 * 1024 * 1024; // 50MB
   if(max_size == 0 || max_size > MAX_MEMORY_BUFFER) {
     max_size = MAX_MEMORY_BUFFER;
   }
@@ -1290,82 +1299,277 @@ static uint64_t calculate_max_buffer_size(file_recovery_t *file_recovery)
   return max_size;
 }
 
-int init_memory_buffer(file_recovery_t *file_recovery)
+//int init_memory_buffer(file_recovery_t *file_recovery)
+//{
+//  if(!file_recovery->use_memory_buffering) {
+//    return 0;
+//  }
+//
+//  file_recovery->buffer_max_size = calculate_max_buffer_size(file_recovery);
+//  if(file_recovery->buffer_max_size == 0) {
+//    return 0;
+//  }
+//
+//  file_recovery->memory_buffer = buffer_pool_acquire(file_recovery->buffer_max_size);
+//  if(file_recovery->memory_buffer == NULL) {
+//    file_recovery->use_memory_buffering = 0;
+//    return -1;
+//  }
+//
+//  file_recovery->buffer_size = 0;
+//  return 0;
+//}
+
+//int append_to_memory_buffer(file_recovery_t *file_recovery, const unsigned char *data, size_t size)
+//{
+//  if(!file_recovery->use_memory_buffering || !file_recovery->memory_buffer) {
+//    return -1;
+//  }
+//
+//  if(file_recovery->buffer_size + size > file_recovery->buffer_max_size) {
+//    free_memory_buffer(file_recovery);
+//    return -2;
+//  }
+//
+//  memcpy(file_recovery->memory_buffer + file_recovery->buffer_size, data, size);
+//  file_recovery->buffer_size += size;
+//  return 0;
+//}
+
+//int flush_memory_buffer_to_file(file_recovery_t *file_recovery)
+//{
+//  if(!file_recovery->memory_buffer || file_recovery->buffer_size == 0) {
+//    return 0;
+//  }
+//
+//  if(file_recovery->handle == NULL) {
+//    file_recovery->handle = fopen(file_recovery->filename, "w+b");
+//    if(file_recovery->handle == NULL) {
+//      return -1;
+//    }
+//  }
+//
+//  if(fwrite(file_recovery->memory_buffer, file_recovery->buffer_size, 1, file_recovery->handle) < 1) {
+//    return -1;
+//  }
+//
+//  if(fflush(file_recovery->handle) != 0) {
+//    return -1;
+//  }
+//
+//  // Don't close the file handle - let PhotoRec handle that later
+//  // PhotoRec needs handle to be non-NULL to call file_finish_aux() which registers files as recovered
+//
+//  file_recovery->file_size = file_recovery->buffer_size;
+//  free_memory_buffer(file_recovery);
+//  return 0;
+//}
+
+//void free_memory_buffer(file_recovery_t *file_recovery)
+//{
+//  if(file_recovery) {
+//    // Return buffer to pool instead of freeing
+//    if(file_recovery->use_memory_buffering == 1 && file_recovery->memory_buffer) {
+//      buffer_pool_release(file_recovery->memory_buffer, file_recovery->buffer_max_size);
+//    }
+//    file_recovery->memory_buffer = NULL;
+//    file_recovery->buffer_size = 0;
+//    file_recovery->buffer_max_size = 0;
+//    file_recovery->use_memory_buffering = 0;
+//  }
+//}
+
+// Memory buffer for each file recovery
+static struct {
+    char filename[256];  // Use filename as key instead of pointer
+    unsigned char *buffer;
+    size_t buffer_size;
+    size_t buffer_capacity;
+} file_buffers[100];
+static int buffer_count = 0;
+
+// Find or create buffer for file
+static int get_buffer_index(file_recovery_t *file_recovery)
 {
-  if(!file_recovery->use_memory_buffering) {
-    return 0;
-  }
+    int i;
 
-  file_recovery->buffer_max_size = calculate_max_buffer_size(file_recovery);
-  if(file_recovery->buffer_max_size == 0) {
-    return 0;
-  }
-
-  file_recovery->memory_buffer = buffer_pool_acquire(file_recovery->buffer_max_size);
-  if(file_recovery->memory_buffer == NULL) {
-    file_recovery->use_memory_buffering = 0;
-    return -1;
-  }
-
-  file_recovery->buffer_size = 0;
-  return 0;
-}
-
-int append_to_memory_buffer(file_recovery_t *file_recovery, const unsigned char *data, size_t size)
-{
-  if(!file_recovery->use_memory_buffering || !file_recovery->memory_buffer) {
-    return -1;
-  }
-
-  if(file_recovery->buffer_size + size > file_recovery->buffer_max_size) {
-    free_memory_buffer(file_recovery);
-    return -2;
-  }
-
-  memcpy(file_recovery->memory_buffer + file_recovery->buffer_size, data, size);
-  file_recovery->buffer_size += size;
-  return 0;
-}
-
-int flush_memory_buffer_to_file(file_recovery_t *file_recovery)
-{
-  if(!file_recovery->memory_buffer || file_recovery->buffer_size == 0) {
-    return 0;
-  }
-
-  if(file_recovery->handle == NULL) {
-    file_recovery->handle = fopen(file_recovery->filename, "w+b");
-    if(file_recovery->handle == NULL) {
-      return -1;
+    // Find existing buffer by filename
+    for (i = 0; i < buffer_count; i++) {
+        if (strcmp(file_buffers[i].filename, file_recovery->filename) == 0) {
+            return i;
+        }
     }
-  }
 
-  if(fwrite(file_recovery->memory_buffer, file_recovery->buffer_size, 1, file_recovery->handle) < 1) {
-    return -1;
-  }
+    // Create new buffer
+    if (buffer_count >= 100) {
+        return -1; // Too many buffers
+    }
 
-  if(fflush(file_recovery->handle) != 0) {
-    return -1;
-  }
+    i = buffer_count++;
+    strncpy(file_buffers[i].filename, file_recovery->filename, sizeof(file_buffers[i].filename) - 1);
+    file_buffers[i].filename[sizeof(file_buffers[i].filename) - 1] = '\0';
+    file_buffers[i].buffer = malloc(1024 * 1024); // 1MB initial
+    file_buffers[i].buffer_size = 0;
+    file_buffers[i].buffer_capacity = 1024 * 1024;
 
-  // Don't close the file handle - let PhotoRec handle that later
-  // PhotoRec needs handle to be non-NULL to call file_finish_aux() which registers files as recovered
+    if (!file_buffers[i].buffer) {
+        buffer_count--;
+        return -1;
+    }
 
-  file_recovery->file_size = file_recovery->buffer_size;
-  free_memory_buffer(file_recovery);
-  return 0;
+    return i;
 }
 
-void free_memory_buffer(file_recovery_t *file_recovery)
+// Memory buffer writing
+int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t size)
 {
-  if(file_recovery) {
-    // Return buffer to pool instead of freeing
-    if(file_recovery->use_memory_buffering == 1 && file_recovery->memory_buffer) {
-      buffer_pool_release(file_recovery->memory_buffer, file_recovery->buffer_max_size);
+    int idx;
+
+    // Simple debug - always write to file
+    FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
+    if (debug_log) {
+        fprintf(debug_log, "DEBUG: file_buffer_write called with %zu bytes for %s (file_recovery=%p)\n",
+               size, file_recovery ? file_recovery->filename : "NULL", (void*)file_recovery);
+        fclose(debug_log);
     }
-    file_recovery->memory_buffer = NULL;
-    file_recovery->buffer_size = 0;
-    file_recovery->buffer_max_size = 0;
-    file_recovery->use_memory_buffering = 0;
-  }
+
+    if (!file_recovery || !data || size == 0) {
+        return -1;
+    }
+
+    idx = get_buffer_index(file_recovery);
+    if (idx < 0) {
+        // Fallback to direct write if buffer fails
+        printf("FALLBACK: Buffer failed, writing %zu bytes DIRECTLY to disk for %s\n",
+               size, file_recovery->filename);
+        if (!file_recovery->handle) return -1;
+        return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
+    }
+
+    // Expand buffer if needed
+    if (file_buffers[idx].buffer_size + size > file_buffers[idx].buffer_capacity) {
+        size_t new_capacity = (file_buffers[idx].buffer_size + size) * 2;
+        unsigned char *new_buffer = realloc(file_buffers[idx].buffer, new_capacity);
+        if (!new_buffer) {
+            // Fallback to direct write
+            if (!file_recovery->handle) return -1;
+            return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
+        }
+        file_buffers[idx].buffer = new_buffer;
+        file_buffers[idx].buffer_capacity = new_capacity;
+    }
+
+    // Add to buffer
+    memcpy(file_buffers[idx].buffer + file_buffers[idx].buffer_size, data, size);
+    file_buffers[idx].buffer_size += size;
+
+    // NOTE: file_size is already updated by PhotoRec in phbf.c, don't double-update
+
+    // PROOF: Log that we're buffering, NOT writing to disk
+    FILE *proof_log = fopen("/home/piotr/buffer_proof.log", "a");
+    if (proof_log) {
+        fprintf(proof_log, "BUFFER: Added %zu bytes to memory buffer for file %s (total buffered: %zu bytes) - first 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+               size, file_recovery->filename, file_buffers[idx].buffer_size,
+               size >= 1 ? ((unsigned char*)data)[0] : 0,
+               size >= 2 ? ((unsigned char*)data)[1] : 0,
+               size >= 3 ? ((unsigned char*)data)[2] : 0,
+               size >= 4 ? ((unsigned char*)data)[3] : 0,
+               size >= 5 ? ((unsigned char*)data)[4] : 0,
+               size >= 6 ? ((unsigned char*)data)[5] : 0,
+               size >= 7 ? ((unsigned char*)data)[6] : 0,
+               size >= 8 ? ((unsigned char*)data)[7] : 0);
+        fclose(proof_log);
+    }
+
+    return 0;
+}
+
+// Clear buffer without writing to disk (for discarded files)
+int file_buffer_clear(file_recovery_t *file_recovery)
+{
+    int i;
+
+    // Debug: Log that buffer is being cleared
+    FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
+    if (debug_log) {
+        fprintf(debug_log, "DEBUG: file_buffer_clear called for %s\n",
+               file_recovery ? file_recovery->filename : "NULL");
+        fclose(debug_log);
+    }
+
+    for (i = 0; i < buffer_count; i++) {
+        if (strcmp(file_buffers[i].filename, file_recovery->filename) == 0) {
+            // Free buffer and remove from array without writing to disk
+            free(file_buffers[i].buffer);
+            file_buffers[i].buffer = NULL;
+            file_buffers[i].buffer_size = 0;
+            file_buffers[i].buffer_capacity = 0;
+            file_buffers[i].filename[0] = '\0';
+
+            // Move last buffer to this position
+            if (i < buffer_count - 1) {
+                file_buffers[i] = file_buffers[buffer_count - 1];
+            }
+            buffer_count--;
+
+            FILE *proof_log = fopen("/home/piotr/buffer_proof.log", "a");
+            if (proof_log) {
+                fprintf(proof_log, "CLEAR: Buffer cleared for discarded file %s\n",
+                       file_recovery->filename);
+                fclose(proof_log);
+            }
+            return 0;
+        }
+    }
+    return 0; // Buffer not found, already cleared
+}
+
+// Flush buffer to disk and free memory
+int file_buffer_flush(file_recovery_t *file_recovery)
+{
+    int i;
+
+    // Debug: Log that flush is being called
+    FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
+    if (debug_log) {
+        fprintf(debug_log, "DEBUG: file_buffer_flush called for %s\n",
+               file_recovery ? file_recovery->filename : "NULL");
+        fclose(debug_log);
+    }
+
+    for (i = 0; i < buffer_count; i++) {
+        if (strcmp(file_buffers[i].filename, file_recovery->filename) == 0) {
+            if (file_recovery->handle && file_buffers[i].buffer_size > 0) {
+                // PROOF: Log actual disk write
+                FILE *proof_log = fopen("/home/piotr/buffer_proof.log", "a");
+                if (proof_log) {
+                    fprintf(proof_log, "FLUSH: Writing %zu bytes from memory buffer to DISK for file %s\n",
+                           file_buffers[i].buffer_size, file_recovery->filename);
+                    fclose(proof_log);
+                }
+
+                if (fwrite(file_buffers[i].buffer, 1, file_buffers[i].buffer_size,
+                          file_recovery->handle) != file_buffers[i].buffer_size) {
+                    printf("FLUSH: ERROR writing to disk!\n");
+                    return -1;
+                }
+                FILE *proof_log2 = fopen("/home/piotr/buffer_proof.log", "a");
+                if (proof_log2) {
+                    fprintf(proof_log2, "FLUSH: SUCCESS - File %s written to disk\n", file_recovery->filename);
+                    fclose(proof_log2);
+                }
+            }
+
+            // Free buffer and remove from array
+            free(file_buffers[i].buffer);
+
+            // Shift remaining buffers
+            for (int j = i; j < buffer_count - 1; j++) {
+                file_buffers[j] = file_buffers[j + 1];
+            }
+            buffer_count--;
+            return 0;
+        }
+    }
+    return 0; // Buffer not found - OK
 }

@@ -98,7 +98,7 @@ struct file_recovery_struct
   char filename[2048];
   alloc_list_t location;
   file_stat_t *file_stat;
-  image_data_t image_data;
+  //image_data_t image_data;
   FILE *handle;
   time_t time;
   uint64_t file_size;
@@ -112,18 +112,18 @@ struct file_recovery_struct
   /* data_check modifies file_recovery->calculated_file_size, it can also update data_check, file_check, offset_error, offset_ok, time, data_check_tmp */
   void (*file_check)(file_recovery_t *file_recovery);
   void (*file_rename)(file_recovery_t *file_recovery);
-  int (*file_check_presave)(const unsigned char *buffer, const unsigned int buffer_size, file_recovery_t *file_recovery);
-  const image_size_filter_t *image_filter;
+  //int (*file_check_presave)(const unsigned char *buffer, const unsigned int buffer_size, file_recovery_t *file_recovery);
+  //const image_size_filter_t *image_filter;
   uint64_t checkpoint_offset;
   int checkpoint_status;	/* 0=suspend at offset_checkpoint if offset_checkpoint>0, 1=resume at offset_checkpoint */
   unsigned int blocksize;
   unsigned int flags;
   unsigned int data_check_tmp;
-  const file_size_filter_t *file_size_filter;  /* pointer to size filter from options */
-  unsigned char *memory_buffer;
-  uint64_t buffer_size;
-  uint64_t buffer_max_size;
-  int use_memory_buffering;
+  //const file_size_filter_t *file_size_filter;  /* pointer to size filter from options */
+  //unsigned char *memory_buffer;
+  //uint64_t buffer_size;
+  //uint64_t buffer_max_size;
+  //int use_memory_buffering;
 };
 
 typedef struct
@@ -501,6 +501,19 @@ time_t get_time_from_YYYYMMDD_HHMMSS(const char *date_asc);
   @ requires \separated(list_search_space, current_search_space, offset);
   @*/
 void get_prev_location_smart(const alloc_data_t *list_search_space, alloc_data_t **current_search_space, uint64_t *offset, const uint64_t prev_location);
+
+// Memory buffer management functions
+int file_buffer_start_for_recovery(file_recovery_t *file_recovery);
+void file_buffer_finish_for_recovery(file_recovery_t *file_recovery);
+
+// Buffered fwrite function
+size_t buffered_fwrite(const void *data, size_t size, size_t count,
+                      FILE *handle, file_recovery_t *file_recovery);
+
+// File buffer functions for recovered file data only
+int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t size);
+int file_buffer_flush(file_recovery_t *file_recovery);
+int file_buffer_clear(file_recovery_t *file_recovery);
 
 #ifdef __cplusplus
 } /* closing brace for extern "C" */

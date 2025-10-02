@@ -152,7 +152,7 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
       memset(&file_recovery, 0, sizeof(file_recovery_t));
       reset_file_recovery(&file_recovery);
       file_recovery.blocksize=blocksize;
-      file_recovery.file_size_filter=&options->file_size_filter;
+      //file_recovery.file_size_filter=&options->file_size_filter;
       current_search_space=td_list_entry(search_walker, alloc_data_t, list);
       offset=current_search_space->start;
       buffer_olddata=buffer_start;
@@ -174,8 +174,8 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	  file_recovery_t file_recovery_new;
 	  memset(&file_recovery_new, 0, sizeof(file_recovery_t));
 	  file_recovery_new.blocksize=blocksize;
-	  file_recovery_new.file_size_filter=&options->file_size_filter;
-	  file_recovery_new.image_filter = file_recovery.image_filter;
+	  //file_recovery_new.file_size_filter=&options->file_size_filter;
+	  //file_recovery_new.image_filter = file_recovery.image_filter;
 	  file_recovery_new.location.start=offset;
 	  file_recovery_new.file_stat=NULL;
 	  td_list_for_each(tmpl, &file_check_list.list)
@@ -222,7 +222,7 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	if(file_recovery.file_stat!=NULL && file_recovery.handle==NULL)
 	{ /* Create new file */
 	  set_filename(&file_recovery, params);
-	  if(file_recovery.file_stat->file_hint->recover==1 && !file_recovery.use_memory_buffering)
+	  if(file_recovery.file_stat->file_hint->recover==1) // && !file_recovery.use_memory_buffering)
 	  {
 	    if(!(file_recovery.handle=fopen(file_recovery.filename,"w+b")))
 	    {
@@ -231,28 +231,29 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	    }
 	  }
 	}
-	if(need_to_check_file==0 && file_recovery.file_stat!=NULL)
+	if(need_to_check_file==0 && file_recovery.file_stat!=NULL &&
+	   file_recovery.handle!=NULL) // || file_recovery.use_memory_buffering))
 	{
 	  /* Check file_size_filter before writing more data */
-	  if(options->file_size_filter.max_file_size > 0 && file_recovery.file_size + blocksize > options->file_size_filter.max_file_size)
+	  /*if(options->file_size_filter.max_file_size > 0 && file_recovery.file_size + blocksize > options->file_size_filter.max_file_size)
 	  {
 	    log_verbose("File should not be bigger than %llu, stop adding data\n",
 		(long long unsigned)options->file_size_filter.max_file_size);
 	    need_to_check_file=1;
 	  }
-	  else
+	  else*/
 	  {
 	    /* Write data using memory buffering or direct file write */
-	    if(file_recovery.use_memory_buffering) {
-	      int write_result = append_to_memory_buffer(&file_recovery, buffer, blocksize);
+	    /*if(file_recovery.use_memory_buffering) {
+	      //int write_result = append_to_memory_buffer(&file_recovery, buffer, blocksize);
 	      if(write_result == -2) {
 		need_to_check_file = 1;
 	      } else if(write_result < 0) {
 		log_critical("Memory buffer error\n");
 		ind_stop=PSTATUS_ENOSPC;
 	      }
-	    } else if(file_recovery.handle!=NULL) {
-	      if(fwrite(buffer,blocksize,1,file_recovery.handle)<1)
+	    } else*/ if(file_recovery.handle!=NULL) {
+	      if(file_buffer_write(&file_recovery, buffer, blocksize)<0)
 	      {
 		log_critical("Cannot write to file %s: %s\n", file_recovery.filename, strerror(errno));
 		ind_stop=PSTATUS_ENOSPC;
@@ -264,9 +265,9 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	      file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
 	      if(file_recovery.data_check!=NULL)
 		res=file_recovery.data_check(buffer_olddata, 2*blocksize, &file_recovery);
-	      if(!file_recovery.use_memory_buffering) {
+	      //if(!file_recovery.use_memory_buffering) {
 		file_recovery.file_size+=blocksize;
-	      }
+	      //}
 	      if(res==DC_STOP || res==DC_ERROR)
 	      { /* EOF found */
 		need_to_check_file=1;
@@ -302,9 +303,22 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	    params->disk->pread(params->disk, buffer, READ_SIZE, offset);
 	  }
 	}
+      // DEBUG: Log need_to_check_file status
+      FILE *debug_log2 = fopen("/home/piotr/debug_buffer.log", "a");
+      if (debug_log2) {
+          fprintf(debug_log2, "DEBUG: End of loop, need_to_check_file=%d\n", need_to_check_file);
+          fclose(debug_log2);
+      }
       } while(need_to_check_file==0);
       if(need_to_check_file==1)
       {
+	// Debug log
+	FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
+	if (debug_log) {
+	    fprintf(debug_log, "DEBUG: need_to_check_file==1, calling file_finish_bf for %s\n", file_recovery.filename);
+	    fclose(debug_log);
+	}
+
 	const uint64_t offset_next_file=get_offset_next_file(&current_search_space->list, list_search_space);
 	const unsigned int file_nbr_old=params->file_nbr;
 	file_recovery.flags=1;
@@ -324,9 +338,17 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
       }
       if(file_recovery.handle!=NULL)
       {
+	// Don't flush - file being discarded
 	fclose(file_recovery.handle);
 	file_recovery.handle=NULL;
-	unlink(file_recovery.filename);
+	// DEBUG: Log file deletion
+	FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
+	if (debug_log) {
+	    fprintf(debug_log, "DEBUG: UNLINK removing file %s (size=%llu)\n",
+	           file_recovery.filename, (unsigned long long)file_recovery.file_size);
+	    fclose(debug_log);
+	}
+	// unlink(file_recovery.filename);
       }
       search_walker=p;
       if(go_backward==0)
@@ -379,9 +401,10 @@ static bf_status_t photorec_bf_pad(struct ph_param *params, const struct ph_opti
 	    {
 	      stop=1;
 	    }
-	    if(fwrite(block_buffer, blocksize, 1, file_recovery->handle)<1)
+	    if(file_buffer_write(file_recovery, block_buffer, blocksize)<0)
 	    {
 	      log_critical("Cannot write to file %s: %s\n", file_recovery->filename, strerror(errno));
+	      file_buffer_clear(file_recovery);  // Clear buffer on error instead of flushing
 	      fclose(file_recovery->handle);
 	      file_recovery->handle=NULL;
 	      return BF_ENOSPC;
@@ -406,9 +429,10 @@ static bf_status_t photorec_bf_pad(struct ph_param *params, const struct ph_opti
 	      (*current_search_space)->file_stat->file_hint==NULL)
 	  {
 	    params->disk->pread(params->disk, block_buffer, blocksize, *offset);
-	    if(fwrite(block_buffer, blocksize, 1, file_recovery->handle)<1)
+	    if(file_buffer_write(file_recovery, block_buffer, blocksize)<0)
 	    {
 	      log_critical("Cannot write to file %s: %s\n", file_recovery->filename, strerror(errno));
+	      file_buffer_clear(file_recovery);  // Clear buffer on error instead of flushing
 	      fclose(file_recovery->handle);
 	      file_recovery->handle=NULL;
 	      return BF_ENOSPC;
@@ -525,9 +549,10 @@ static bf_status_t photorec_bf_frag_fast(struct ph_param *params, const struct p
       {
 	/* TODO handle this problem */
       }
-      if(fwrite(block_buffer, blocksize, 1, file_recovery->handle)<1)
+      if(file_buffer_write(file_recovery, block_buffer, blocksize)<0)
       {
 	log_critical("Cannot write to file %s: %s\n", file_recovery->filename, strerror(errno));
+	file_buffer_flush(file_recovery);
 	fclose(file_recovery->handle);
 	file_recovery->handle=NULL;
 	return BF_ENOSPC;

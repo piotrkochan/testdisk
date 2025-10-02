@@ -170,10 +170,10 @@ static void file_check_png(file_recovery_t *fr)
 	fr->file_size=0;
 	return ;
       }
-      if(fr->image_filter) {
-        fr->image_data.width = be32(ihdr->width);
-        fr->image_data.height = be32(ihdr->height);
-      }
+      //if(fr->image_filter) {
+      //  fr->image_data.width = be32(ihdr->width);
+      //  fr->image_data.height = be32(ihdr->height);
+      //}
     }
   }
 }
@@ -322,7 +322,7 @@ static int header_check_mng(const unsigned char *buffer, const unsigned int buff
 
 static int png_maches_image_filtering(const unsigned char *buffer, const unsigned int buffer_size, file_recovery_t *file_recovery)
 {
-  if(!file_recovery->image_filter)
+  //if(!file_recovery->image_filter)
     return 1;
 
   if(buffer_size < 24)
@@ -348,12 +348,12 @@ static int png_maches_image_filtering(const unsigned char *buffer, const unsigne
   }
 
   // Apply file size filter if we found IEND
-  if(estimated_file_size > 0 && file_recovery->file_size_filter) {
-    if(file_recovery->file_size_filter->min_file_size > 0 && estimated_file_size < file_recovery->file_size_filter->min_file_size)
-      return 0;
-    if(file_recovery->file_size_filter->max_file_size > 0 && estimated_file_size > file_recovery->file_size_filter->max_file_size)
-      return 0;
-  }
+  //if(estimated_file_size > 0 && file_recovery->file_size_filter) {
+  //  if(file_recovery->file_size_filter->min_file_size > 0 && estimated_file_size < file_recovery->file_size_filter->min_file_size)
+  //    return 0;
+  //  if(file_recovery->file_size_filter->max_file_size > 0 && estimated_file_size > file_recovery->file_size_filter->max_file_size)
+  //    return 0;
+  //}
 
   if(check_size >= 16 + sizeof(struct png_ihdr))
   {
@@ -361,10 +361,10 @@ static int png_maches_image_filtering(const unsigned char *buffer, const unsigne
     const unsigned int width = be32(ihdr->width);
     const unsigned int height = be32(ihdr->height);
     // Save dimensions to avoid re-reading from disk in file_check
-    file_recovery->image_data.width = width;
-    file_recovery->image_data.height = height;
-    if(should_skip_image_by_dimensions(file_recovery->image_filter, width, height))
-      return 0;
+    //file_recovery->image_data.width = width;
+    //file_recovery->image_data.height = height;
+    //if(should_skip_image_by_dimensions(file_recovery->image_filter, width, height))
+    //  return 0;
   }
 
   return 1;
@@ -407,8 +407,8 @@ static int header_check_png(const unsigned char *buffer, const unsigned int buff
   file_recovery_new->calculated_file_size=8;
   file_recovery_new->data_check=&data_check_png;
   file_recovery_new->file_check=&file_check_png;
-  file_recovery_new->file_check_presave=&png_maches_image_filtering;
-  file_recovery_new->image_filter=file_recovery->image_filter;
+  //file_recovery_new->file_check_presave=&png_maches_image_filtering;
+  //file_recovery_new->image_filter=file_recovery->image_filter;
   /*@ assert valid_file_recovery(file_recovery_new); */
   return 1;
 }

@@ -1056,8 +1056,8 @@ static int header_check_jpg(const unsigned char *buffer, const unsigned int buff
   file_recovery_new->time=jpg_time;
   file_recovery_new->extension=file_hint_jpg.extension;
   file_recovery_new->file_check=&file_check_jpg;
-  file_recovery_new->file_check_presave=&jpg_maches_image_filtering;
-  file_recovery_new->image_filter=file_recovery->image_filter;
+  //file_recovery_new->file_check_presave=&jpg_maches_image_filtering;
+  //file_recovery_new->image_filter=file_recovery->image_filter;
   if(buffer_size >= 4)
     file_recovery_new->data_check=&data_check_jpg;
   /*@ assert valid_read_string(file_recovery_new->extension); */
@@ -1934,7 +1934,7 @@ struct sof_header
 
 static int jpg_maches_image_filtering(const unsigned char *buffer, const unsigned int buffer_size, file_recovery_t *file_recovery)
 {
-  if(!file_recovery->image_filter)
+  //if(!file_recovery->image_filter)
     return 1;
 
   if(buffer_size < 20)
@@ -1959,12 +1959,12 @@ static int jpg_maches_image_filtering(const unsigned char *buffer, const unsigne
   }
 
   // Apply file size filter if we found end marker
-  if(estimated_file_size > 0 && file_recovery->file_size_filter) {
-    if(file_recovery->file_size_filter->min_file_size > 0 && estimated_file_size < file_recovery->file_size_filter->min_file_size)
-      return 0;
-    if(file_recovery->file_size_filter->max_file_size > 0 && estimated_file_size > file_recovery->file_size_filter->max_file_size)
-      return 0;
-  }
+  //if(estimated_file_size > 0 && file_recovery->file_size_filter) {
+  //  if(file_recovery->file_size_filter->min_file_size > 0 && estimated_file_size < file_recovery->file_size_filter->min_file_size)
+  //    return 0;
+  //  if(file_recovery->file_size_filter->max_file_size > 0 && estimated_file_size > file_recovery->file_size_filter->max_file_size)
+  //    return 0;
+  //}
 
   // Check dimensions in the buffer we're examining
   if(check_size > 10)
@@ -1979,10 +1979,10 @@ static int jpg_maches_image_filtering(const unsigned char *buffer, const unsigne
           const unsigned int width = be16(sof->width);
           const unsigned int height = be16(sof->height);
           // Save dimensions to avoid re-reading from disk in file_check
-          file_recovery->image_data.width = width;
-          file_recovery->image_data.height = height;
-          if(file_recovery->image_filter && should_skip_image_by_dimensions(file_recovery->image_filter, width, height))
-            return 0;
+          //file_recovery->image_data.width = width;
+          //file_recovery->image_data.height = height;
+          //if(file_recovery->image_filter && should_skip_image_by_dimensions(file_recovery->image_filter, width, height))
+          //  return 0;
         }
         break;
       }
@@ -2147,10 +2147,10 @@ static void jpg_save_thumbnail(const file_recovery_t *file_recovery, const char 
     *(sep+1)='t';
 #endif
     /* Check if thumbnail size meets file recovery size filter requirements */
-    if(file_recovery->file_size_filter != NULL &&
-       file_recovery->file_size_filter->min_file_size > 0 &&
-       thumb_size < file_recovery->file_size_filter->min_file_size)
-      return;
+    //if(file_recovery->file_size_filter != NULL &&
+    //   file_recovery->file_size_filter->min_file_size > 0 &&
+    //   thumb_size < file_recovery->file_size_filter->min_file_size)
+    //  return;
 #ifndef DISABLED_FOR_FRAMAC
     if((out=fopen(thumbname,"wb"))!=NULL)
     {
@@ -2370,8 +2370,8 @@ static int jpg_check_app1(file_recovery_t *file_recovery, const unsigned int ext
   if(thumb_offset+thumb_size > nbytes)
     return 1;
 
-  if (file_recovery->image_filter && !jpg_maches_image_filtering((const unsigned char *)(buffer + thumb_offset), thumb_size, file_recovery))
-    return 1;
+  //if (file_recovery->image_filter && !jpg_maches_image_filtering((const unsigned char *)(buffer + thumb_offset), thumb_size, file_recovery))
+  //  return 1;
 
   /*@ assert thumb_offset + thumb_size <= nbytes; */
   /*@ assert 0 < thumb_size; */
@@ -2577,16 +2577,16 @@ static void file_check_jpg(file_recovery_t *file_recovery)
 #else
   file_recovery->file_size=file_recovery->calculated_file_size;
 #endif
-  if(file_recovery->image_filter && file_recovery->handle) {
-    fseek(file_recovery->handle, 0, SEEK_SET);
-    char buffer[512];
-    if(fread(buffer, 1, sizeof(buffer), file_recovery->handle) > 0) {
-      unsigned int width = 0, height = 0;
-      jpg_get_size((unsigned char*)buffer, sizeof(buffer), &height, &width);
-      file_recovery->image_data.width = width;
-      file_recovery->image_data.height = height;
-    }
-  }
+  //if(file_recovery->image_filter && file_recovery->handle) {
+  //  fseek(file_recovery->handle, 0, SEEK_SET);
+  //  char buffer[512];
+  //  if(fread(buffer, 1, sizeof(buffer), file_recovery->handle) > 0) {
+  //    unsigned int width = 0, height = 0;
+  //    jpg_get_size((unsigned char*)buffer, sizeof(buffer), &height, &width);
+  //    file_recovery->image_data.width = width;
+  //    file_recovery->image_data.height = height;
+  //  }
+  //}
 #if 0
     /* FIXME REMOVE ME */
   if(file_recovery->offset_error!=0)
@@ -2594,7 +2594,7 @@ static void file_check_jpg(file_recovery_t *file_recovery)
     file_recovery->file_size=file_recovery->offset_error;
     file_recovery->offset_error=0;
     fseek(file_recovery->handle, file_recovery->file_size, SEEK_SET);
-    fwrite(jpg_footer, sizeof(jpg_footer), 1, file_recovery->handle);
+    file_buffer_write(file_recovery, jpg_footer, sizeof(jpg_footer));
     file_recovery->file_size+=2;
     return ;
   }
@@ -2724,8 +2724,8 @@ static data_check_t data_check_jpg(const unsigned char *buffer, const unsigned i
   if(file_recovery->calculated_file_size<2)
     file_recovery->calculated_file_size=2;
 
-  if (file_recovery->image_filter && !jpg_maches_image_filtering(buffer, buffer_size, file_recovery))
-    return DC_STOP;
+  /*if (file_recovery->image_filter && !jpg_maches_image_filtering(buffer, buffer_size, file_recovery))
+    return DC_STOP;*/
 
   /*@ assert file_recovery->calculated_file_size >= 2; */
   /*@ assert file_recovery->data_check == &data_check_jpg; */

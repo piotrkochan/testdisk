@@ -138,22 +138,22 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
 
   // Enable memory buffering for:
   // Always use memory buffering for all files
-  file_recovery->use_memory_buffering = 1;
-  if(init_memory_buffer(file_recovery) < 0) {
-    file_recovery->use_memory_buffering = 0;
-  }
+  //file_recovery->use_memory_buffering = 1;
+  //if(init_memory_buffer(file_recovery) < 0) {
+  //  file_recovery->use_memory_buffering = 0;
+  //}
 
-  if(file_recovery->image_filter && file_recovery->file_check_presave) {
-    const unsigned int blocksize=params->blocksize;
-    const unsigned int read_size=(blocksize>65536?blocksize:65536);
-    if(!file_recovery->file_check_presave(buffer, read_size, file_recovery)) {
-      return PSTATUS_OK;
-    }
-  }
+  //if(file_recovery->image_filter && file_recovery->file_check_presave) {
+  //  const unsigned int blocksize=params->blocksize;
+  //  const unsigned int read_size=(blocksize>65536?blocksize:65536);
+  //  if(!file_recovery->file_check_presave(buffer, read_size, file_recovery)) {
+  //    return PSTATUS_OK;
+  //  }
+  //}
 
   if(file_recovery->file_stat->file_hint->recover==1)
   {
-    if(!file_recovery->use_memory_buffering) {
+    //if(!file_recovery->use_memory_buffering) {
 #if defined(__CYGWIN__) || defined(__MINGW32__)
     file_recovery->handle=fopen_with_retry(file_recovery->filename,"w+b");
 #else
@@ -166,7 +166,7 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
 #endif
       params->offset=offset;
       return PSTATUS_EACCES;
-    }
+    //}
     }
   }
   return PSTATUS_OK;
@@ -197,8 +197,8 @@ inline static pstatus_t photorec_check_header(file_recovery_t *file_recovery, st
   file_recovery_new.blocksize=blocksize;
   file_recovery_new.location.start=offset;
   // Preserve filter pointers from parent file_recovery
-  file_recovery_new.file_size_filter = file_recovery->file_size_filter;
-  file_recovery_new.image_filter = file_recovery->image_filter;
+  //file_recovery_new.file_size_filter = file_recovery->file_size_filter;
+  //file_recovery_new.image_filter = file_recovery->image_filter;
 #if !defined(SINGLE_FORMAT) || defined(SINGLE_FORMAT_tar)
   if(file_recovery->file_stat!=NULL && file_recovery->file_stat->file_hint==&file_hint_tar &&
       is_valid_tar_header((const struct tar_posix_header *)(buffer-0x200)))
