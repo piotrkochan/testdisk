@@ -83,6 +83,9 @@ static data_check_t data_check_NTSC(const unsigned char *buffer, const unsigned 
   @*/
 static void file_check_dv_NTSC(file_recovery_t *fr)
 {
+  if(read_file_data_from_buffer(fr))
+    return;
+
   char buffer_header[512];
   uint64_t fs=fr->file_size/120000*120000;
   if(my_fseek(fr->handle, 0, SEEK_SET) < 0 ||
@@ -164,6 +167,9 @@ static data_check_t data_check_PAL(const unsigned char *buffer, const unsigned i
   @*/
 static void file_check_dv_PAL(file_recovery_t *fr)
 {
+  if(read_file_data_from_buffer(fr))
+    return;
+
   char buffer_header[512];
   uint64_t fs=fr->file_size/144000*144000;
   if(my_fseek(fr->handle, 0, SEEK_SET) < 0 ||

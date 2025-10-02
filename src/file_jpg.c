@@ -703,6 +703,9 @@ static uint64_t file_check_mpo_aux(FILE *handle, const unsigned char *mpo, const
   @*/
 static void file_check_mpo(file_recovery_t *fr)
 {
+  if(read_file_data_from_buffer(fr))
+    return;
+
   char sbuffer[512];
   const unsigned char *buffer=(const unsigned char *)&sbuffer;
   uint64_t offset=0;
@@ -2517,6 +2520,9 @@ static void file_check_jpg(file_recovery_t *file_recovery)
 {
   uint64_t thumb_offset;
   static uint64_t thumb_error=0;
+
+  if(read_file_data_from_buffer(file_recovery))
+    return;
   if(file_recovery->calculated_file_size<=2)
     file_recovery->calculated_file_size=0;
   /* FIXME REMOVE ME */

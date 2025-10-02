@@ -55,6 +55,9 @@ enum { READ_SIZE=32*512 };
   @*/
 static void file_check_spf(file_recovery_t *file_recovery)
 {
+  if(read_file_data_from_buffer(file_recovery))
+    return;
+
   file_recovery->file_size=0;
   if(my_fseek(file_recovery->handle, 0, SEEK_SET)<0)
   {

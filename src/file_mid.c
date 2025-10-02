@@ -70,6 +70,9 @@ struct midi_header
   @*/
 static void file_check_midi(file_recovery_t *file_recovery)
 {
+  if(read_file_data_from_buffer(file_recovery))
+    return;
+
   const uint64_t fs_org=file_recovery->file_size;
   struct midi_header hdr;
   unsigned int i;

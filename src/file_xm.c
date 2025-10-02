@@ -224,6 +224,9 @@ static int parse_instruments(file_recovery_t *fr, uint16_t instrs)
   @*/
 static void file_check_xm(file_recovery_t *fr)
 {
+  if(read_file_data_from_buffer(fr))
+    return;
+
   char buffer[4];
   const struct xm_hdr *hdr=(const struct xm_hdr *)&buffer;
   uint16_t patterns, instrs;

@@ -59,6 +59,9 @@ struct x4a_catalog
   @*/
 static void file_check_x4a(file_recovery_t *fr)
 {
+  if(read_file_data_from_buffer(fr))
+    return;
+
   char buffer[0x200];
   unsigned int i;
   unsigned int fs = 0x80;

@@ -514,6 +514,8 @@ size_t buffered_fwrite(const void *data, size_t size, size_t count,
 int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t size);
 int file_buffer_flush(file_recovery_t *file_recovery);
 int file_buffer_clear(file_recovery_t *file_recovery);
+const unsigned char* file_buffer_get_data(file_recovery_t *file_recovery, size_t *buffer_size);
+int read_file_data_from_buffer(file_recovery_t *file_recovery);
 
 #ifdef __cplusplus
 } /* closing brace for extern "C" */

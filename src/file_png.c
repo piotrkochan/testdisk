@@ -120,6 +120,9 @@ static int png_check_ihdr(const struct png_ihdr *ihdr)
   @*/
 static void file_check_png(file_recovery_t *fr)
 {
+  if(read_file_data_from_buffer(fr))
+    return;
+
   if(fr->file_size<fr->calculated_file_size)
   {
     fr->file_size=0;

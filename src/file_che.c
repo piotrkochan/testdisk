@@ -64,6 +64,9 @@ struct che_block
   @*/
 static void file_check_che(file_recovery_t *file_recovery)
 {
+  if(read_file_data_from_buffer(file_recovery))
+    return;
+
   struct che_block block;
   uint64_t offset;
   uint64_t new_offset=0x19;

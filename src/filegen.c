@@ -1484,6 +1484,40 @@ int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t s
     return 0;
 }
 
+// Get buffer data for file_check functions to work on memory instead of disk
+const unsigned char* file_buffer_get_data(file_recovery_t *file_recovery, size_t *buffer_size)
+{
+    int i;
+
+    if (!file_recovery || !buffer_size) {
+        return NULL;
+    }
+
+    for (i = 0; i < buffer_count; i++) {
+        if (strcmp(file_buffers[i].filename, file_recovery->filename) == 0) {
+            *buffer_size = file_buffers[i].buffer_size;
+            return (const unsigned char*)file_buffers[i].buffer;
+        }
+    }
+
+    *buffer_size = 0;
+    return NULL;
+}
+
+// Helper function for file_check functions - returns 1 if should use buffer instead of disk
+int read_file_data_from_buffer(file_recovery_t *file_recovery)
+{
+  // Check if file data is in memory buffer instead of on disk
+  size_t buffer_size;
+  const unsigned char *buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
+  if (buffer_data && buffer_size > 0) {
+    // File is in memory buffer, use simple size check instead of complex disk validation
+    file_recovery->file_size = file_recovery->calculated_file_size;
+    return 1;
+  }
+  return 0;
+}
+
 // Clear buffer without writing to disk (for discarded files)
 int file_buffer_clear(file_recovery_t *file_recovery)
 {

@@ -83,6 +83,9 @@ struct InDesignContigObjMarker {
   @*/
 static void file_check_indd(file_recovery_t *file_recovery)
 {
+  if(read_file_data_from_buffer(file_recovery))
+    return;
+
   const uint64_t file_size_org=file_recovery->file_size;
   uint64_t offset;
   if(file_recovery->file_size<file_recovery->calculated_file_size)

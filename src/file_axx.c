@@ -60,6 +60,9 @@ struct SHeader
   @*/
 static void file_check_axx(file_recovery_t *fr)
 {
+  if(read_file_data_from_buffer(fr))
+    return;
+
   uint64_t	offset=0x10;
   /*@
     @ loop assigns *fr->handle, errno, fr->file_size;

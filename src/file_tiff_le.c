@@ -749,6 +749,9 @@ static uint64_t file_check_tiff_le_aux(file_recovery_t *fr, const uint32_t tiff_
 void file_check_tiff_le(file_recovery_t *fr)
 {
   /*@ assert \valid(fr); */
+  if(read_file_data_from_buffer(fr))
+    return;
+
   uint64_t calculated_file_size=0;
   char buffer[sizeof(TIFFHeader)];
   const TIFFHeader *header=(const TIFFHeader *)&buffer;

@@ -346,6 +346,9 @@ static void file_date_pdf(file_recovery_t *file_recovery)
   @*/
 static void file_check_pdf_and_size(file_recovery_t *file_recovery)
 {
+  if(read_file_data_from_buffer(file_recovery))
+    return;
+
   char buffer[PDF_READ_SIZE + 3];
   int i;
   int taille;

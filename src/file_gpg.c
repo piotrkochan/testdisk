@@ -325,6 +325,9 @@ static unsigned int file_check_gpg_pubkey(FILE *handle, const uint64_t offset, c
   @*/
 static void file_check_gpg(file_recovery_t *file_recovery)
 {
+  if(read_file_data_from_buffer(file_recovery))
+    return;
+
   unsigned int tag=0;
   unsigned int nbr=0;
   int partial_body_length=0;

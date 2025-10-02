@@ -54,6 +54,9 @@ const file_hint_t file_hint_gif= {
   @*/
 static void file_check_gif(file_recovery_t *file_recovery)
 {
+  if(read_file_data_from_buffer(file_recovery))
+    return;
+
   const char gif_footer[2]= {0x00, 0x3b};
   char buffer[2];
   /* file_recovery->calculated_file_size is always >= */

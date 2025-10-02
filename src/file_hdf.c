@@ -145,6 +145,9 @@ static uint64_t file_check_hdf_aux(FILE *handle, char *dd_buf)
   @*/
 static void file_check_hdf(file_recovery_t *file_recovery)
 {
+  if(read_file_data_from_buffer(file_recovery))
+    return;
+
   uint64_t file_size;
   char *dd;
   dd=(char *)MALLOC(sizeof(struct dd_struct)*65536);
