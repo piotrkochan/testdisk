@@ -98,7 +98,7 @@ struct file_recovery_struct
   char filename[2048];
   alloc_list_t location;
   file_stat_t *file_stat;
-  //image_data_t image_data;
+  image_data_t image_data;  // FIXED: Activated for image filtering
   FILE *handle;
   time_t time;
   uint64_t file_size;
@@ -112,14 +112,13 @@ struct file_recovery_struct
   /* data_check modifies file_recovery->calculated_file_size, it can also update data_check, file_check, offset_error, offset_ok, time, data_check_tmp */
   void (*file_check)(file_recovery_t *file_recovery);
   void (*file_rename)(file_recovery_t *file_recovery);
-  //int (*file_check_presave)(const unsigned char *buffer, const unsigned int buffer_size, file_recovery_t *file_recovery);
+  int (*file_check_presave)(const unsigned char *buffer, const unsigned int buffer_size, file_recovery_t *file_recovery);
   //const image_size_filter_t *image_filter;
   uint64_t checkpoint_offset;
   int checkpoint_status;	/* 0=suspend at offset_checkpoint if offset_checkpoint>0, 1=resume at offset_checkpoint */
   unsigned int blocksize;
   unsigned int flags;
   unsigned int data_check_tmp;
-  //const file_size_filter_t *file_size_filter;  /* pointer to size filter from options */
   //unsigned char *memory_buffer;
   //uint64_t buffer_size;
   //uint64_t buffer_max_size;
@@ -517,6 +516,9 @@ int file_buffer_clear(file_recovery_t *file_recovery);
 const unsigned char* file_buffer_get_data(file_recovery_t *file_recovery, size_t *buffer_size);
 int read_file_data_from_buffer(file_recovery_t *file_recovery);
 void print_buffer_statistics(void);
+void set_global_file_size_filter(const file_size_filter_t *filter);
+uint64_t get_user_min_filesize(void);
+uint64_t get_user_max_filesize(void);
 
 #ifdef __cplusplus
 } /* closing brace for extern "C" */

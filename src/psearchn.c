@@ -79,6 +79,9 @@ extern int need_to_stop;
 
 pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options, alloc_data_t *list_search_space)
 {
+  // Set global file size filter for this recovery session
+  set_global_file_size_filter(&options->file_size_filter);
+
   pstatus_t ind_stop=PSTATUS_OK;
 #ifndef DISABLED_FOR_FRAMAC
   uint64_t offset;
@@ -208,10 +211,16 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
 	  /*@ assert valid_file_recovery(&file_recovery); */
 	  file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
 	  /*@ assert valid_file_recovery(&file_recovery); */
-	  if(file_recovery.data_check!=NULL)
+
+	  // Check user file size limits before data_check to prevent unlimited growth
+	  uint64_t user_max = get_user_max_filesize();
+	  if (user_max > 0 && file_recovery.file_size + blocksize > user_max) {
+	    data_check_status=DC_STOP;
+	  } else if(file_recovery.data_check!=NULL) {
 	    data_check_status=file_recovery.data_check(buffer_olddata,2*blocksize,&file_recovery);
-	  else
+	  } else {
 	    data_check_status=DC_CONTINUE;
+	  }
 	  file_recovery.file_size+=blocksize;
 #ifndef DISABLED_FOR_FRAMAC
 	  if(data_check_status==DC_STOP)

@@ -493,9 +493,6 @@ void file_check_size_max(file_recovery_t *file_recovery)
 
 void reset_file_recovery(file_recovery_t *file_recovery)
 {
-  // Save filters - they're session config, not per-file state
-  //const file_size_filter_t *saved_file_size_filter = file_recovery->file_size_filter;
-  //const image_size_filter_t *saved_image_filter = file_recovery->image_filter;
 
   // Clear any existing memory buffer for this file
   file_buffer_clear(file_recovery);
@@ -515,7 +512,7 @@ void reset_file_recovery(file_recovery_t *file_recovery)
   file_recovery->data_check=NULL;
   file_recovery->file_check=NULL;
   file_recovery->file_rename=NULL;
-  //file_recovery->file_check_presave=NULL;
+  file_recovery->file_check_presave=NULL;
   file_recovery->offset_error=0;
   file_recovery->offset_ok=0;
   file_recovery->checkpoint_status=0;
@@ -523,14 +520,11 @@ void reset_file_recovery(file_recovery_t *file_recovery)
   file_recovery->flags=0;
   file_recovery->extra=0;
   file_recovery->data_check_tmp=0;
-  //file_recovery->image_data.width=0;
-  //file_recovery->image_data.height=0;
+  file_recovery->image_data.width=0;   // FIXED: Activated for image filtering
+  file_recovery->image_data.height=0;  // FIXED: Activated for image filtering
   // Free memory buffer BEFORE zeroing fields
   //free_memory_buffer(file_recovery);
 
-  // Restore session filters
-  //file_recovery->file_size_filter=saved_file_size_filter;
-  //file_recovery->image_filter=saved_image_filter;
 }
 
 file_stat_t * init_file_stats(file_enable_t *files_enable)
@@ -1220,14 +1214,60 @@ time_t get_time_from_YYYYMMDD_HHMMSS(const char *date_asc)
   return mktime(&tm_time);
 }
 
-// Get max file size for this file type
+// Global file size filter for all recovery operations (copy, not pointer!)
+static file_size_filter_t global_file_size_filter = {0, 0};
+
+// Helper functions for user filesize limit checking
+
+// Set global file size filter for all recovery operations
+void set_global_file_size_filter(const file_size_filter_t *filter)
+{
+  if (filter != NULL) {
+    global_file_size_filter = *filter; // Copy values, not pointer!
+  } else {
+    global_file_size_filter.min_file_size = 0;
+    global_file_size_filter.max_file_size = 0;
+  }
+}
+
+// Check if user has filesize filters active
+static int has_user_filesize_limits(void)
+{
+  return (global_file_size_filter.min_file_size > 0 ||
+          global_file_size_filter.max_file_size > 0);
+}
+
+// Get user's max limit (0 = no limit)
+uint64_t get_user_max_filesize(void)
+{
+  return global_file_size_filter.max_file_size;
+}
+
+// Get user's min limit (0 = no limit)
+uint64_t get_user_min_filesize(void)
+{
+  return global_file_size_filter.min_file_size;
+}
+
+// Get max file size for this file type (respects user limits)
 static uint64_t get_max_filesize_for_buffer(file_recovery_t *file_recovery)
 {
+  // Start with file type's limit
+  uint64_t type_max = PHOTOREC_MAX_FILE_SIZE; // Global default
+  uint64_t user_max;
+
   if(file_recovery->file_stat && file_recovery->file_stat->file_hint &&
      file_recovery->file_stat->file_hint->max_filesize > 0) {
-    return file_recovery->file_stat->file_hint->max_filesize;
+    type_max = file_recovery->file_stat->file_hint->max_filesize;
   }
-  return PHOTOREC_MAX_FILE_SIZE; // Global default
+
+  // If user has max limit, use the smaller of the two
+  user_max = get_user_max_filesize();
+  if (user_max > 0 && user_max < type_max) {
+    return user_max;
+  }
+
+  return type_max;
 }
 
 // Memory buffer for each file recovery with hash table lookup
@@ -1243,7 +1283,7 @@ static struct {
 } buffer_stats = {0, 0, 0, 0};
 
 static struct {
-    char filename[256];  // Use filename as key instead of pointer
+    uint64_t location_start;  // FIXED: Use location.start as key instead of filename
     unsigned char *buffer;
     size_t buffer_size;
     size_t buffer_capacity;
@@ -1253,14 +1293,12 @@ static struct {
 static int hash_table[HASH_TABLE_SIZE]; // Index into file_buffers, -1 means empty
 static int buffer_count = 0;
 
-// Simple hash function for filenames
-static int hash_filename(const char *filename) {
-    unsigned int hash = 5381;
-    const char *c = filename;
-    while (*c) {
-        hash = ((hash << 5) + hash) + (unsigned char)*c; // hash * 33 + c
-        c++;
-    }
+// FIXED: Simple hash function for location.start instead of filename
+static int hash_location(uint64_t location_start) {
+    // Simple hash for 64-bit location values
+    uint32_t high = (uint32_t)(location_start >> 32);
+    uint32_t low = (uint32_t)(location_start & 0xFFFFFFFF);
+    unsigned int hash = high ^ low;
     return hash % HASH_TABLE_SIZE;
 }
 
@@ -1278,17 +1316,22 @@ static void init_buffer_hash_table(void) {
     }
 }
 
-// Find or create buffer for file
+// FIXED: Find or create buffer for file using location.start as key
 static int get_buffer_index(file_recovery_t *file_recovery)
 {
+    int hash;
+    int idx;
+    int i;
+    uint64_t max_filesize;
+
     init_buffer_hash_table();
 
-    int hash = hash_filename(file_recovery->filename);
-    int idx = hash_table[hash];
+    hash = hash_location(file_recovery->location.start);
+    idx = hash_table[hash];
 
     // Search collision chain
     while (idx != -1) {
-        if (strcmp(file_buffers[idx].filename, file_recovery->filename) == 0) {
+        if (file_buffers[idx].location_start == file_recovery->location.start) {
             return idx;
         }
         idx = file_buffers[idx].next_index;
@@ -1299,18 +1342,19 @@ static int get_buffer_index(file_recovery_t *file_recovery)
         return -1; // Too many buffers
     }
 
-    int i = buffer_count++;
-    strncpy(file_buffers[i].filename, file_recovery->filename, sizeof(file_buffers[i].filename) - 1);
-    file_buffers[i].filename[sizeof(file_buffers[i].filename) - 1] = '\0';
+    i = buffer_count++;
+    file_buffers[i].location_start = file_recovery->location.start;
 
     // Smart initial allocation based on file type
-    uint64_t max_filesize = get_max_filesize_for_buffer(file_recovery);
-    size_t initial_size = (max_filesize > 1024*1024) ? 1024*1024 : (size_t)max_filesize; // Start with 1MB or file max, whichever is smaller
+    max_filesize = get_max_filesize_for_buffer(file_recovery);
+    {
+        size_t initial_size = (max_filesize > 1024*1024) ? 1024*1024 : (size_t)max_filesize; // Start with 1MB or file max, whichever is smaller
 
-    file_buffers[i].buffer = malloc(initial_size);
-    file_buffers[i].buffer_size = 0;
-    file_buffers[i].buffer_capacity = initial_size;
-    file_buffers[i].next_index = -1;
+        file_buffers[i].buffer = malloc(initial_size);
+        file_buffers[i].buffer_size = 0;
+        file_buffers[i].buffer_capacity = initial_size;
+        file_buffers[i].next_index = -1;
+    }
 
     if (!file_buffers[i].buffer) {
         buffer_count--;
@@ -1328,6 +1372,11 @@ static int get_buffer_index(file_recovery_t *file_recovery)
 int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t size)
 {
     int idx;
+    uint64_t user_min;
+    uint64_t user_max;
+    uint64_t max_filesize;
+    uint64_t current_size;
+    uint64_t new_size;
 
     if (!file_recovery || !data || size == 0) {
         return -1;
@@ -1338,16 +1387,45 @@ int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t s
         // Fallback to direct write if buffer fails
         buffer_stats.disk_fallback_full++;
         if (!file_recovery->handle) return -1;
+
+        // Check user file size filters before direct write
+        user_min = get_user_min_filesize();
+        user_max = get_user_max_filesize();
+        current_size = file_recovery->file_size + size;
+
+        if (user_min > 0 && current_size < user_min) {
+            return 0; // Pretend success but don't write
+        }
+        if (user_max > 0 && current_size > user_max) {
+            return 0; // Pretend success but don't write
+        }
+
         return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
     }
 
-    // Check if we exceed max file size for this file type
-    uint64_t max_filesize = get_max_filesize_for_buffer(file_recovery);
+    // NEW: Check user file size limits BEFORE buffer operations
+    user_min = get_user_min_filesize();
+    user_max = get_user_max_filesize();
+    new_size = file_recovery->file_size + size;
+
+    if ((user_min > 0 && new_size < user_min) ||
+        (user_max > 0 && new_size > user_max)) {
+        // File size outside user limits - just ignore this write (successful no-op)
+        return 0;
+    }
+
+    // Check if we exceed max file size for this file type (fallback behavior when no user limits)
+    max_filesize = get_max_filesize_for_buffer(file_recovery);
     if (file_buffers[idx].buffer_size + size > max_filesize) {
-        // File too large for buffer, fallback to direct write
-        buffer_stats.disk_fallback_size++;
-        if (!file_recovery->handle) return -1;
-        return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
+        // File too large for buffer, fallback to direct write (only when no user limits set)
+        if (!has_user_filesize_limits()) {
+            buffer_stats.disk_fallback_size++;
+            if (!file_recovery->handle) return -1;
+            return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
+        } else {
+            // User has limits set - this should have been caught above, but safety check
+            return 0;
+        }
     }
 
     // Expand buffer if needed with smarter allocation strategy
@@ -1435,12 +1513,12 @@ const unsigned char* file_buffer_get_data(file_recovery_t *file_recovery, size_t
 
     init_buffer_hash_table();
 
-    int hash = hash_filename(file_recovery->filename);
+    int hash = hash_location(file_recovery->location.start);
     int idx = hash_table[hash];
 
     // Search collision chain
     while (idx != -1) {
-        if (strcmp(file_buffers[idx].filename, file_recovery->filename) == 0) {
+        if (file_buffers[idx].location_start == file_recovery->location.start) {
             *buffer_size = file_buffers[idx].buffer_size;
             return (const unsigned char*)file_buffers[idx].buffer;
         }
@@ -1465,13 +1543,13 @@ int read_file_data_from_buffer(file_recovery_t *file_recovery)
   return 0;
 }
 
-// Remove buffer from hash table (helper function)
+// FIXED: Remove buffer from hash table (helper function)
 static void remove_buffer_from_hash_table(int buffer_idx) {
     int hash;
     int idx, prev_idx;
 
     // Find and remove from hash table
-    hash = hash_filename(file_buffers[buffer_idx].filename);
+    hash = hash_location(file_buffers[buffer_idx].location_start);
     idx = hash_table[hash];
     prev_idx = -1;
 
@@ -1497,16 +1575,18 @@ int file_buffer_clear(file_recovery_t *file_recovery)
 {
     int hash;
     int idx;
+    int last_idx;
+    int moved_hash;
 
     if (!file_recovery) return 0;
 
     init_buffer_hash_table();
-    hash = hash_filename(file_recovery->filename);
+    hash = hash_location(file_recovery->location.start);
     idx = hash_table[hash];
 
     // Search collision chain
     while (idx != -1) {
-        if (strcmp(file_buffers[idx].filename, file_recovery->filename) == 0) {
+        if (file_buffers[idx].location_start == file_recovery->location.start) {
             // Found it, remove from hash table first
             remove_buffer_from_hash_table(idx);
 
@@ -1515,12 +1595,12 @@ int file_buffer_clear(file_recovery_t *file_recovery)
 
             // Move last buffer to this position and update hash table
             if (idx < buffer_count - 1) {
-                int last_idx = buffer_count - 1;
+                last_idx = buffer_count - 1;
                 remove_buffer_from_hash_table(last_idx); // Remove old location
                 file_buffers[idx] = file_buffers[last_idx]; // Move
 
                 // Re-insert moved buffer into hash table
-                int moved_hash = hash_filename(file_buffers[idx].filename);
+                moved_hash = hash_location(file_buffers[idx].location_start);
                 file_buffers[idx].next_index = hash_table[moved_hash];
                 hash_table[moved_hash] = idx;
             }
@@ -1537,21 +1617,39 @@ int file_buffer_flush(file_recovery_t *file_recovery)
 {
     int hash;
     int idx;
+    int last_idx;
+    int moved_hash;
 
     if (!file_recovery) return 0;
 
     init_buffer_hash_table();
-    hash = hash_filename(file_recovery->filename);
+    hash = hash_location(file_recovery->location.start);
     idx = hash_table[hash];
 
     // Search collision chain
     while (idx != -1) {
-        if (strcmp(file_buffers[idx].filename, file_recovery->filename) == 0) {
+        if (file_buffers[idx].location_start == file_recovery->location.start) {
             // Write to disk if handle available
             if (file_recovery->handle && file_buffers[idx].buffer_size > 0) {
-                if (fwrite(file_buffers[idx].buffer, 1, file_buffers[idx].buffer_size,
-                          file_recovery->handle) != file_buffers[idx].buffer_size) {
-                    return -1;
+                // Check user file size filters before writing to disk
+                uint64_t user_min = get_user_min_filesize();
+                uint64_t user_max = get_user_max_filesize();
+
+                // Check if file size is within user limits
+                if (user_min > 0 && file_buffers[idx].buffer_size < user_min) {
+                    printf("DEBUG file_buffer_flush: REJECTING file too small (%lu < %lu)\n",
+                           (unsigned long)file_buffers[idx].buffer_size, (unsigned long)user_min);
+                    // Don't write - just clean up buffer and return success
+                } else if (user_max > 0 && file_buffers[idx].buffer_size > user_max) {
+                    printf("DEBUG file_buffer_flush: REJECTING file too large (%lu > %lu)\n",
+                           (unsigned long)file_buffers[idx].buffer_size, (unsigned long)user_max);
+                    // Don't write - just clean up buffer and return success
+                } else {
+                    // File size is OK - write to disk
+                    if (fwrite(file_buffers[idx].buffer, 1, file_buffers[idx].buffer_size,
+                              file_recovery->handle) != file_buffers[idx].buffer_size) {
+                        return -1;
+                    }
                 }
             }
 
@@ -1561,12 +1659,12 @@ int file_buffer_flush(file_recovery_t *file_recovery)
 
             // Move last buffer to this position and update hash table
             if (idx < buffer_count - 1) {
-                int last_idx = buffer_count - 1;
+                last_idx = buffer_count - 1;
                 remove_buffer_from_hash_table(last_idx);
                 file_buffers[idx] = file_buffers[last_idx];
 
                 // Re-insert moved buffer into hash table
-                int moved_hash = hash_filename(file_buffers[idx].filename);
+                moved_hash = hash_location(file_buffers[idx].location_start);
                 file_buffers[idx].next_index = hash_table[moved_hash];
                 hash_table[moved_hash] = idx;
             }

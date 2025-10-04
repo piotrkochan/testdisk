@@ -149,7 +149,15 @@ pstatus_t QPhotorec::photorec_aux(alloc_data_t *list_search_space)
       {
 	if(file_recovery.handle!=NULL)
 	{
-	  if(fwrite(buffer,blocksize,1,file_recovery.handle)<1)
+	  // Check user file size filters before writing
+	  uint64_t user_min = get_user_min_filesize();
+	  uint64_t user_max = get_user_max_filesize();
+	  uint64_t new_size = file_recovery.file_size + blocksize;
+
+	  if ((user_max > 0 && new_size > user_max) ||
+	      (user_min > 0 && new_size < user_min)) {
+	    // Don't write - file size outside user limits
+	  } else if(fwrite(buffer,blocksize,1,file_recovery.handle)<1)
 	  { 
 	    log_critical("Cannot write to file %s after %llu bytes: %s\n", file_recovery.filename, (long long unsigned)file_recovery.file_size, strerror(errno));
 	    if(errno==EFBIG)
@@ -176,10 +184,16 @@ pstatus_t QPhotorec::photorec_aux(alloc_data_t *list_search_space)
 	  else
 	  {
 	    file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
-	    if(file_recovery.data_check!=NULL)
+
+	    // Check user file size limits before data_check to prevent unlimited growth
+	    uint64_t user_max = get_user_max_filesize();
+	    if (user_max > 0 && file_recovery.file_size + blocksize > user_max) {
+	      data_check_status=DC_STOP;
+	    } else if(file_recovery.data_check!=NULL) {
 	      data_check_status=file_recovery.data_check(buffer_olddata,2*blocksize,&file_recovery);
-	    else
+	    } else {
 	      data_check_status=DC_CONTINUE;
+	    }
 	    file_recovery.file_size+=blocksize;
 	    if(data_check_status==DC_STOP)
 	    {

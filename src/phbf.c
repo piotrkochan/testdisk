@@ -124,6 +124,9 @@ static uint64_t get_offset_next_file(const struct td_list_head *search_walker, c
 
 pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options, alloc_data_t *list_search_space)
 {
+  // Set global file size filter for this recovery session
+  set_global_file_size_filter(&options->file_size_filter);
+
   struct td_list_head *search_walker = NULL;
   struct td_list_head *p= NULL;
   unsigned char *buffer_start;
@@ -152,7 +155,6 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
       memset(&file_recovery, 0, sizeof(file_recovery_t));
       reset_file_recovery(&file_recovery);
       file_recovery.blocksize=blocksize;
-      //file_recovery.file_size_filter=&options->file_size_filter;
       current_search_space=td_list_entry(search_walker, alloc_data_t, list);
       offset=current_search_space->start;
       buffer_olddata=buffer_start;
@@ -174,7 +176,6 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	  file_recovery_t file_recovery_new;
 	  memset(&file_recovery_new, 0, sizeof(file_recovery_t));
 	  file_recovery_new.blocksize=blocksize;
-	  //file_recovery_new.file_size_filter=&options->file_size_filter;
 	  //file_recovery_new.image_filter = file_recovery.image_filter;
 	  file_recovery_new.location.start=offset;
 	  file_recovery_new.file_stat=NULL;
@@ -264,13 +265,13 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	      //	  log_info("add sector %llu\n", (long long unsigned)(offset/512));
 	      file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
 	      if(file_recovery.data_check!=NULL)
-		res=file_recovery.data_check(buffer_olddata, 2*blocksize, &file_recovery);
+		    res=file_recovery.data_check(buffer_olddata, 2*blocksize, &file_recovery);
 	      //if(!file_recovery.use_memory_buffering) {
-		file_recovery.file_size+=blocksize;
+		  file_recovery.file_size+=blocksize;
 	      //}
 	      if(res==DC_STOP || res==DC_ERROR)
 	      { /* EOF found */
-		need_to_check_file=1;
+		    need_to_check_file=1;
 	      }
 	    }
 	  }
@@ -792,7 +793,7 @@ static pstatus_t photorec_bf_aux(struct ph_param *params, const struct ph_option
       &current_search_space, &offset, buffer);
   ind_stop=photorec_bf_frag(params, options, file_recovery, list_search_space, current_search_space, phase, &current_search_space, &offset, buffer, block_buffer, 0);
   free(buffer);
-  (void)file_finish2(file_recovery, params, options, list_search_space);
+  (void)file_finish2(file_recovery, params, options->paranoid, list_search_space);
   switch(ind_stop)
   {
     case BF_STOP:

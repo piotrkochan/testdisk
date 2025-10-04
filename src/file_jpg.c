@@ -1059,7 +1059,7 @@ static int header_check_jpg(const unsigned char *buffer, const unsigned int buff
   file_recovery_new->time=jpg_time;
   file_recovery_new->extension=file_hint_jpg.extension;
   file_recovery_new->file_check=&file_check_jpg;
-  //file_recovery_new->file_check_presave=&jpg_maches_image_filtering;
+  file_recovery_new->file_check_presave=&jpg_maches_image_filtering;
   //file_recovery_new->image_filter=file_recovery->image_filter;
   if(buffer_size >= 4)
     file_recovery_new->data_check=&data_check_jpg;
@@ -1981,11 +1981,10 @@ static int jpg_maches_image_filtering(const unsigned char *buffer, const unsigne
           const struct sof_header *sof = (const struct sof_header *)&check_buffer[i];
           const unsigned int width = be16(sof->width);
           const unsigned int height = be16(sof->height);
-          // Save dimensions to avoid re-reading from disk in file_check
-          //file_recovery->image_data.width = width;
-          //file_recovery->image_data.height = height;
-          //if(file_recovery->image_filter && should_skip_image_by_dimensions(file_recovery->image_filter, width, height))
-          //  return 0;
+          // FIXED: Save dimensions for filtering in file_finish_aux
+          file_recovery->image_data.width = width;
+          file_recovery->image_data.height = height;
+          log_trace("DEBUG JPG: set dimensions %ux%u for %s\n", width, height, file_recovery->filename);
         }
         break;
       }

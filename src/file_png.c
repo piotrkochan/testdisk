@@ -38,6 +38,7 @@
 #include "types.h"
 #include "common.h"
 #include "filegen.h"
+#include "log.h"
 #include "photorec.h"
 #include "image_filter.h"
 
@@ -363,11 +364,13 @@ static int png_maches_image_filtering(const unsigned char *buffer, const unsigne
     const struct png_ihdr *ihdr = (const struct png_ihdr *)&check_buffer[16];
     const unsigned int width = be32(ihdr->width);
     const unsigned int height = be32(ihdr->height);
-    // Save dimensions to avoid re-reading from disk in file_check
-    //file_recovery->image_data.width = width;
-    //file_recovery->image_data.height = height;
-    //if(should_skip_image_by_dimensions(file_recovery->image_filter, width, height))
-    //  return 0;
+    // FIXED: Save dimensions for filtering in file_finish_aux
+    file_recovery->image_data.width = width;
+    file_recovery->image_data.height = height;
+    log_trace("DEBUG PNG: set dimensions %ux%u for %s\n", width, height, file_recovery->filename);
+  }
+  else {
+    log_trace("DEBUG PNG: buffer too small (%u < %zu) for %s\n", check_size, 16 + sizeof(struct png_ihdr), file_recovery->filename);
   }
 
   return 1;
@@ -410,7 +413,7 @@ static int header_check_png(const unsigned char *buffer, const unsigned int buff
   file_recovery_new->calculated_file_size=8;
   file_recovery_new->data_check=&data_check_png;
   file_recovery_new->file_check=&file_check_png;
-  //file_recovery_new->file_check_presave=&png_maches_image_filtering;
+  file_recovery_new->file_check_presave=&png_maches_image_filtering;
   //file_recovery_new->image_filter=file_recovery->image_filter;
   /*@ assert valid_file_recovery(file_recovery_new); */
   return 1;

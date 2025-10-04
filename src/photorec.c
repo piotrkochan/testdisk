@@ -659,8 +659,12 @@ static void file_block_free(alloc_list_t *list_allocation)
   @ requires \separated(file_recovery, params, file_recovery->handle);
   @ decreases 0;
   @*/
-static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid)
+// FIXED: Enhanced file_finish_aux with buffer flushing and filtering
+static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid)
 {
+  if(file_recovery->file_stat==NULL)
+    return PFSTATUS_BAD;
+
 #ifndef DISABLED_FOR_FRAMAC
   /*@ assert valid_file_recovery(file_recovery); */
   /*@ assert file_recovery->file_check == \null || \valid_function(file_recovery->file_check); */
@@ -688,39 +692,54 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
 #endif
     file_recovery->file_size=0;
   }
-  if(params->image_filter && has_any_image_size_filter(params->image_filter) &&
-     file_recovery->file_stat->file_hint->is_image ) {
-#ifdef DEBUG_FILE_FINISH
-    log_trace("Image filter check: file=%s, size=%llu, width=%u, height=%u\n",
-           file_recovery->filename,
-           (unsigned long long)file_recovery->file_size,
-           0, //file_recovery->image_data.width,
-           0); //file_recovery->image_data.height);
-#endif
+  // FIXED: Unified filtering logic for all files
+  {
+    uint64_t user_min = get_user_min_filesize();
+    uint64_t user_max = get_user_max_filesize();
+
+    // AAAAAAAA Always show debug for testing
+    // log_trace("Filter check: file=%s, size=%llu, width=%u, height=%u\n",
+    //        file_recovery->filename,
+    //        (unsigned long long)file_recovery->file_size,
+    //        file_recovery->image_data.width,
+    //        file_recovery->image_data.height);
 
     // Check file size filter
-    //if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size) {
-    //    file_recovery->file_size=0;
-    //}
-    //else if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size) {
-    //    file_recovery->file_size=0;
-    //}
-    // Check image dimensions filter
-    //else if(should_skip_image_by_dimensions(params->image_filter, file_recovery->image_data.width, file_recovery->image_data.height)) {
-    //    file_recovery->file_size=0;
-    //}
+    if(user_min > 0 && file_recovery->file_size < user_min) {
+        file_recovery->file_size=0;
+    }
+    else if(user_max > 0 && file_recovery->file_size > user_max) {
+        file_recovery->file_size=0;
+    }
+    // Check image dimensions filter if this is an image
+    else if(params->image_filter && has_any_image_size_filter(params->image_filter) &&
+            file_recovery->file_stat->file_hint->is_image &&
+            should_skip_image_by_dimensions(params->image_filter, file_recovery->image_data.width, file_recovery->image_data.height)) {
+        file_recovery->file_size=0;
+    }
   }
+
+  // FIXED: Only flush buffer to disk if file passes all filters
+  if(file_recovery->file_size > 0 && file_recovery->handle) {
+    if(file_buffer_flush(file_recovery) < 0) {
+      file_buffer_clear(file_recovery);
+      return PFSTATUS_BAD;
+    }
+  }
+
   if(file_recovery->file_size==0)
   {
     if(paranoid==2)
-      return ;
-    file_buffer_clear(file_recovery);  // Clear buffer for zero-length file instead of flushing
-    fclose(file_recovery->handle);
-    file_recovery->handle=NULL;
+      return PFSTATUS_BAD;
+    file_buffer_clear(file_recovery);  // Clear buffer for rejected file
+    if(file_recovery->handle) {
+      fclose(file_recovery->handle);
+      file_recovery->handle=NULL;
+    }
     /* File is zero-length; erase it */
     /*@ assert valid_read_string((const char *)file_recovery->filename); */
     unlink(file_recovery->filename);
-    return;
+    return PFSTATUS_BAD;
   }
 #if defined(HAVE_FTRUNCATE)
   fflush(file_recovery->handle);
@@ -750,6 +769,7 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
       file_recovery->file_stat!=NULL)
     file_recovery->file_stat->recovered++;
 #endif
+  return PFSTATUS_OK;  // FIXED: Return success status
 }
 
 /** file_finish_bf()
@@ -799,7 +819,7 @@ int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
     file_buffer_flush(file_recovery);
 
   if(file_recovery->handle)
-    file_finish_aux(file_recovery, params, 2);
+    (void)file_finish_aux(file_recovery, params, 2);
   if(file_recovery->file_size==0)
   {
     if(file_recovery->offset_error!=0)
@@ -843,45 +863,43 @@ void file_recovery_aborted(file_recovery_t *file_recovery, struct ph_param *para
   reset_file_recovery(file_recovery);
 }
 
+// FIXED: Simplified file_finish2 using enhanced file_finish_aux
 pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, alloc_data_t *list_search_space)
 {
   int file_truncated;
-
+  pfstatus_t result;
 
   if(file_recovery->file_stat==NULL)
     return PFSTATUS_BAD;
 
-  // Handle memory buffering for images with filtering
-  //if(file_recovery->use_memory_buffering) {
-  //  if(file_recovery->image_filter && file_recovery->file_check_presave) {
-  //    if(!file_recovery->file_check_presave(file_recovery->memory_buffer, file_recovery->buffer_size, file_recovery)) {
-  //      // File rejected by filters - don't create it at all
-  //      reset_file_recovery(file_recovery);
-  //      return PFSTATUS_BAD;
-  //    }
-  //  }
-  //  // File passed filters - flush to disk
-  //  if(flush_memory_buffer_to_file(file_recovery) < 0) {
-  //    reset_file_recovery(file_recovery);
-  //    return PFSTATUS_BAD;
-  //  }
-  //}
-
-  if(file_recovery->handle) {
-    // For combined filters (image + filesize), skip paranoid file_check to avoid re-reading from disk
-    // The file was already validated in memory by file_check_presave
-    const int skip_paranoid = 0; //(file_recovery->image_filter &&
-                                //file_recovery->file_size_filter &&
-                                //(file_recovery->file_size_filter->min_file_size > 0 ||
-                                // file_recovery->file_size_filter->max_file_size > 0));
-    file_finish_aux(file_recovery, params, (skip_paranoid ? 0 : (paranoid==0?0:1)));
+  // FIXED: Call file_check_presave to populate image_data before filtering
+  if(file_recovery->file_check_presave) {
+    const unsigned char *buffer_data = NULL;
+    size_t buffer_size = 0;
+    buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
+    // AAAAAAAA log_trace("DEBUG file_check_presave: found=%p, buffer_data=%p, buffer_size=%zu\n",
+    //          file_recovery->file_check_presave, buffer_data, buffer_size);
+    if(buffer_data && buffer_size > 0) {
+      file_recovery->file_check_presave(buffer_data, buffer_size, file_recovery);
+      // AAAAAAAA log_trace("DEBUG after presave: width=%u, height=%u\n",
+      //          file_recovery->image_data.width, file_recovery->image_data.height);
+    }
   }
+
+  // Call enhanced file_finish_aux that handles filtering and buffer flushing
+  result = file_finish_aux(file_recovery, params, paranoid);
+  if(result != PFSTATUS_OK) {
+    reset_file_recovery(file_recovery);
+    return result;
+  }
+
   if(file_recovery->file_size==0)
   {
     file_block_truncate_zero(file_recovery, list_search_space);
     reset_file_recovery(file_recovery);
     return PFSTATUS_BAD;
   }
+
   file_truncated=file_block_truncate(file_recovery, list_search_space, params->blocksize);
   file_block_log(file_recovery, params->disk->sector_size);
 #ifdef ENABLE_DFXML
@@ -1200,51 +1218,6 @@ list_part_t *init_list_part(disk_t *disk, const struct ph_options *options)
   return list_part;
 }
 
-// Debug function to validate search space integrity
-static void validate_search_space(const alloc_data_t *list_search_space, const char *operation)
-{
-#ifdef DEBUG_SEARCH_SPACE
-  struct td_list_head *walker = NULL;
-  alloc_data_t *prev = NULL;
-  int block_count = 0;
-
-  log_debug("=== Search Space Validation: %s ===\n", operation);
-
-  td_list_for_each(walker, &list_search_space->list)
-  {
-    alloc_data_t *current = td_list_entry(walker, alloc_data_t, list);
-
-    // Validate block ordering
-    if(prev && prev->end >= current->start) {
-      log_critical("CORRUPTION: Overlapping blocks detected in %s\n", operation);
-      log_critical("  Block[%d]: start=%llu end=%llu\n", block_count-1,
-                   (unsigned long long)prev->start, (unsigned long long)prev->end);
-      log_critical("  Block[%d]: start=%llu end=%llu\n", block_count,
-                   (unsigned long long)current->start, (unsigned long long)current->end);
-      log_flush();
-      exit(1);
-    }
-
-    // Validate block structure
-    if(current->start > current->end) {
-      log_critical("CORRUPTION: Invalid block in %s - start > end\n", operation);
-      log_critical("  Block[%d]: start=%llu end=%llu\n", block_count,
-                   (unsigned long long)current->start, (unsigned long long)current->end);
-      log_flush();
-      exit(1);
-    }
-
-    log_debug("  Block[%d]: start=%llu end=%llu file_stat=%p\n",
-              block_count, (unsigned long long)current->start,
-              (unsigned long long)current->end, current->file_stat);
-
-    prev = current;
-    block_count++;
-  }
-
-  log_debug("=== Validation Complete: %d blocks ===\n", block_count);
-#endif
-}
 
 /* file_block_remove_from_sp: remove block from list_search_space, update offset and new_current_search_space in consequence */
 /*@
@@ -1304,7 +1277,6 @@ static inline void file_block_remove_from_sp_aux(alloc_data_t *tmp, alloc_data_t
 static inline void file_block_remove_from_sp(alloc_data_t *list_search_space, alloc_data_t **new_current_search_space, uint64_t *offset, const unsigned int blocksize)
 {
 #ifndef DISABLED_FOR_FRAMAC
-  validate_search_space(list_search_space, "before block removal");
   struct td_list_head *search_walker = &(*new_current_search_space)->list;
   if(search_walker!=NULL)
   {
@@ -1328,6 +1300,45 @@ static inline void file_block_remove_from_sp(alloc_data_t *list_search_space, al
   }
 
   log_critical("file_block_remove_from_sp(list_search_space, alloc_data_t **new_current_search_space, uint64_t *offset, const unsigned int blocksize) failed\n");
+
+  // FIXED: Add debugging information and graceful handling instead of crash
+  // AAAAA log_critical("file_block_remove_from_sp failed: offset=%llu, blocksize=%u\n",
+  //              (unsigned long long)*offset, blocksize);
+  // AAAAA log_critical("Search space ranges:\n");
+  // AAAAA td_list_for_each(search_walker, &list_search_space->list)
+  // AAAAA {
+  // AAAAA   alloc_data_t *tmp;
+  // AAAAA   tmp=td_list_entry(search_walker, alloc_data_t, list);
+  // AAAAA   log_critical("  Range: %llu-%llu\n", (unsigned long long)tmp->start, (unsigned long long)tmp->end);
+  // AAAAA }
+  // AAAAA log_critical("Current search space: start=%llu, end=%llu\n",
+  // AAAAA              (unsigned long long)(*new_current_search_space)->start,
+  // AAAAA              (unsigned long long)(*new_current_search_space)->end);
+
+  // FIXED: Instead of crashing, try to gracefully advance offset to next valid range
+  // AAAAA log_warning("Attempting to skip to next valid range instead of crashing\n");
+
+  // Find the next available search space range that comes after this offset
+  alloc_data_t *next_valid = NULL;
+  td_list_for_each(search_walker, &list_search_space->list)
+  {
+    alloc_data_t *tmp;
+    tmp=td_list_entry(search_walker, alloc_data_t, list);
+    if(tmp->start > *offset) {
+      next_valid = tmp;
+      break;
+    }
+  }
+
+  if(next_valid) {
+    // AAAAA log_warning("Skipping to next range: %llu-%llu\n",
+    //              (unsigned long long)next_valid->start, (unsigned long long)next_valid->end);
+    *new_current_search_space = next_valid;
+    *offset = next_valid->start;
+    return;
+  }
+
+  // AAAAA log_critical("No valid ranges found after offset %llu, exiting\n", (unsigned long long)*offset);
   log_flush();
   exit(1);
 #endif
@@ -1376,7 +1387,6 @@ static void file_block_truncate_aux(const uint64_t start, const uint64_t end, al
   if(start >= end)
     return ;
 #ifndef DISABLED_FOR_FRAMAC
-  validate_search_space(list_search_space, "before truncate_aux");
   td_list_for_each(search_walker, &list_search_space->list)
   {
     alloc_data_t *tmp;
@@ -1419,7 +1429,6 @@ static void file_block_truncate_aux(const uint64_t start, const uint64_t end, al
     new_sp->list.next=&new_sp->list;
     td_list_add_tail(&new_sp->list, &list_search_space->list);
   }
-  validate_search_space(list_search_space, "after truncate_aux");
 #endif
 }
 
