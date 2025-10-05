@@ -119,10 +119,10 @@ struct file_recovery_struct
   unsigned int blocksize;
   unsigned int flags;
   unsigned int data_check_tmp;
-  //unsigned char *memory_buffer;
-  //uint64_t buffer_size;
-  //uint64_t buffer_max_size;
-  //int use_memory_buffering;
+  unsigned char *memory_buffer;        // FIXED: Activated memory buffer fields
+  uint64_t buffer_size;
+  uint64_t buffer_max_size;
+  int use_memory_buffering;            // FIXED: Flag to enable memory buffering
 };
 
 typedef struct

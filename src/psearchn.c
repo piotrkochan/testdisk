@@ -186,7 +186,8 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
       }
       else
       {
-	if(file_recovery.handle!=NULL)
+	// FIXED: Support both memory buffering and traditional file handle
+	if(file_recovery.use_memory_buffering || file_recovery.handle!=NULL)
 	{
 	  if(file_buffer_write(&file_recovery, buffer, blocksize)<0)
 	  { 

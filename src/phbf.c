@@ -223,7 +223,8 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	if(file_recovery.file_stat!=NULL && file_recovery.handle==NULL)
 	{ /* Create new file */
 	  set_filename(&file_recovery, params);
-	  if(file_recovery.file_stat->file_hint->recover==1) // && !file_recovery.use_memory_buffering)
+	  // FIXED: Only create file handle when memory buffering is disabled
+	  if(file_recovery.file_stat->file_hint->recover==1 && !file_recovery.use_memory_buffering)
 	  {
 	    if(!(file_recovery.handle=fopen(file_recovery.filename,"w+b")))
 	    {
@@ -232,8 +233,9 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	    }
 	  }
 	}
+	// FIXED: Continue processing with either file handle OR memory buffering
 	if(need_to_check_file==0 && file_recovery.file_stat!=NULL &&
-	   file_recovery.handle!=NULL) // || file_recovery.use_memory_buffering))
+	   (file_recovery.handle!=NULL || file_recovery.use_memory_buffering))
 	{
 	  /* Check file_size_filter before writing more data */
 	  /*if(options->file_size_filter.max_file_size > 0 && file_recovery.file_size + blocksize > options->file_size_filter.max_file_size)
@@ -244,31 +246,24 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	  }
 	  else*/
 	  {
-	    /* Write data using memory buffering or direct file write */
-	    /*if(file_recovery.use_memory_buffering) {
-	      //int write_result = append_to_memory_buffer(&file_recovery, buffer, blocksize);
-	      if(write_result == -2) {
-		need_to_check_file = 1;
-	      } else if(write_result < 0) {
-		log_critical("Memory buffer error\n");
-		ind_stop=PSTATUS_ENOSPC;
-	      }
-	    } else*/ if(file_recovery.handle!=NULL) {
-	      if(file_buffer_write(&file_recovery, buffer, blocksize)<0)
-	      {
-		log_critical("Cannot write to file %s: %s\n", file_recovery.filename, strerror(errno));
-		ind_stop=PSTATUS_ENOSPC;
-	      }
-	    }
 	    {
 	      data_check_t res=DC_CONTINUE;
 	      //	  log_info("add sector %llu\n", (long long unsigned)(offset/512));
+	      // FIXED: Restore original sequence - file_block_append BEFORE buffer write
 	      file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
+
+	      // FIXED: Write to buffer (memory buffering) or file handle (traditional)
+	      if(file_recovery.use_memory_buffering || file_recovery.handle!=NULL) {
+	        if(file_buffer_write(&file_recovery, buffer, blocksize)<0)
+	        {
+	          log_critical("Cannot write to file %s: %s\n", file_recovery.filename, strerror(errno));
+	          ind_stop=PSTATUS_ENOSPC;
+	        }
+	      }
+
 	      if(file_recovery.data_check!=NULL)
 		    res=file_recovery.data_check(buffer_olddata, 2*blocksize, &file_recovery);
-	      //if(!file_recovery.use_memory_buffering) {
-		  file_recovery.file_size+=blocksize;
-	      //}
+	      file_recovery.file_size+=blocksize;
 	      if(res==DC_STOP || res==DC_ERROR)
 	      { /* EOF found */
 		    need_to_check_file=1;
@@ -665,6 +660,10 @@ static bf_status_t photorec_bf_frag(struct ph_param *params, const struct ph_opt
     log_info("extrablock_offset=%llu sectors\n", (long long unsigned)(extrablock_offset/512));
 #endif
     memcpy(&file_recovery_backup, file_recovery, sizeof(file_recovery_backup));
+    // FIXED: Memory buffer state should not be shared between backup and original
+    file_recovery_backup.memory_buffer = NULL;
+    file_recovery_backup.buffer_size = 0;
+    file_recovery_backup.use_memory_buffering = 0;
     /* FIXME 16 100 250 */
     for(blocs_to_skip=-2;
 	blocs_to_skip<5000 &&
@@ -677,6 +676,10 @@ static bf_status_t photorec_bf_frag(struct ph_param *params, const struct ph_opt
     {
       bf_status_t res;
       memcpy(file_recovery, &file_recovery_backup, sizeof(file_recovery_backup));
+      // FIXED: Don't restore buffer state when copying from backup
+      file_recovery->memory_buffer = NULL;
+      file_recovery->buffer_size = 0;
+      // Keep original use_memory_buffering setting from backup
       *current_search_space=extractblock_search_space;
       *offset=extrablock_offset;
 #ifdef DEBUG_BF

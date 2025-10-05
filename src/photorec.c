@@ -719,9 +719,18 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
     }
   }
 
-  // FIXED: Only flush buffer to disk if file passes all filters
-  if(file_recovery->file_size > 0 && file_recovery->handle) {
-    if(file_buffer_flush(file_recovery) < 0) {
+  // FIXED: Create file handle and flush buffer if file passes all filters
+  if(file_recovery->file_size > 0) {
+    // FIXED: Create file handle now if using memory buffering
+    if(file_recovery->use_memory_buffering && !file_recovery->handle) {
+      if(!(file_recovery->handle=fopen(file_recovery->filename,"w+b"))) {
+        log_critical("Cannot create file %s: %s\n", file_recovery->filename, strerror(errno));
+        file_buffer_clear(file_recovery);
+        return PFSTATUS_BAD;
+      }
+    }
+
+    if(file_recovery->handle && file_buffer_flush(file_recovery) < 0) {
       file_buffer_clear(file_recovery);
       return PFSTATUS_BAD;
     }
@@ -742,15 +751,19 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
     return PFSTATUS_BAD;
   }
 #if defined(HAVE_FTRUNCATE)
-  fflush(file_recovery->handle);
-  if(ftruncate(fileno(file_recovery->handle), file_recovery->file_size)<0)
-  {
-    log_critical("ftruncate failed.\n");
+  if(file_recovery->handle) {
+    fflush(file_recovery->handle);
+    if(ftruncate(fileno(file_recovery->handle), file_recovery->file_size)<0)
+    {
+      log_critical("ftruncate failed.\n");
+    }
   }
 #endif
   file_buffer_flush(file_recovery);  // Only flush when file is successfully completed
-  fclose(file_recovery->handle);
-  file_recovery->handle=NULL;
+  if(file_recovery->handle) {
+    fclose(file_recovery->handle);
+    file_recovery->handle=NULL;
+  }
   if(file_recovery->time!=0 && file_recovery->time!=(time_t)-1)
     set_date(file_recovery->filename, file_recovery->time, file_recovery->time);
   /*@ assert valid_file_recovery(file_recovery); */
@@ -783,58 +796,36 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
     1: file recovered
  */
 
+// FIXED: Simplified file_finish_bf to use same logic as file_finish2
 int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
     const struct ph_options *options, alloc_data_t *list_search_space)
 {
-  // Debug: Log that file_finish_bf is being called
-  FILE *debug_log = fopen("/home/piotr/debug_buffer.log", "a");
-  if (debug_log) {
-      fprintf(debug_log, "DEBUG: file_finish_bf called for %s (file_size=%llu)\n",
-             file_recovery ? file_recovery->filename : "NULL",
-             file_recovery ? (unsigned long long)file_recovery->file_size : 0);
-      fclose(debug_log);
-  }
+  pfstatus_t result;
 
   if(file_recovery->file_stat==NULL)
     return 0;
 
-  // Handle memory buffering for images with filtering
-  //if(file_recovery->use_memory_buffering) {
-  //  if(file_recovery->image_filter && file_recovery->file_check_presave) {
-  //    if(!file_recovery->file_check_presave(file_recovery->memory_buffer, file_recovery->buffer_size, file_recovery)) {
-  //      // File rejected by filters - don't create it at all
-  //      reset_file_recovery(file_recovery);
-  //      return 0;
-  //    }
-  //  }
-  //  // File passed filters - flush to disk
-  //  if(flush_memory_buffer_to_file(file_recovery) < 0) {
-  //    reset_file_recovery(file_recovery);
-  //    return -1;
-  //  }
-  //}
+  // FIXED: Call file_check_presave like file_finish2
+  if(file_recovery->file_check_presave) {
+    const unsigned char *buffer_data = NULL;
+    size_t buffer_size = 0;
+    buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
+    if(buffer_data && buffer_size > 0) {
+      file_recovery->file_check_presave(buffer_data, buffer_size, file_recovery);
+    }
+  }
 
-  // Only flush buffer to disk if file was successfully completed
-  if(file_recovery->handle && file_recovery->file_size > 0)
-    file_buffer_flush(file_recovery);
+  // FIXED: Use unified file_finish_aux (no double flushing)
+  result = file_finish_aux(file_recovery, params, 2);
 
-  if(file_recovery->handle)
-    (void)file_finish_aux(file_recovery, params, 2);
-  if(file_recovery->file_size==0)
+  if(result != PFSTATUS_OK || file_recovery->file_size==0)
   {
     if(file_recovery->offset_error!=0)
       return -1;
     file_block_truncate_zero(file_recovery, list_search_space);
-    if(file_recovery->handle!=NULL)
-    {
-      file_buffer_clear(file_recovery);  // Clear buffer for zero-size file instead of flushing
-      fclose(file_recovery->handle);
-      // unlink(file_recovery->filename);
-    }
     reset_file_recovery(file_recovery);
     return 0;
   }
-
 
   file_block_truncate(file_recovery, list_search_space, params->blocksize);
   file_block_log(file_recovery, params->disk->sector_size);
@@ -1277,70 +1268,37 @@ static inline void file_block_remove_from_sp_aux(alloc_data_t *tmp, alloc_data_t
 static inline void file_block_remove_from_sp(alloc_data_t *list_search_space, alloc_data_t **new_current_search_space, uint64_t *offset, const unsigned int blocksize)
 {
 #ifndef DISABLED_FOR_FRAMAC
-  struct td_list_head *search_walker = &(*new_current_search_space)->list;
-  if(search_walker!=NULL)
+  // OPTIMIZED: Check current search space first (most common case)
+  if (*new_current_search_space != list_search_space &&
+      *offset >= (*new_current_search_space)->start &&
+      *offset + blocksize <= (*new_current_search_space)->end + 1) {
+    // Fast path - current search space is correct
+    file_block_remove_from_sp_aux(*new_current_search_space, new_current_search_space, offset, blocksize);
+    return;
+  }
+
+  // SLOW PATH: Search for correct space only when needed
+  struct td_list_head *search_walker = NULL;
+  td_list_for_each(search_walker, &list_search_space->list)
   {
-    alloc_data_t *tmp;
-    tmp=td_list_entry(search_walker, alloc_data_t, list);
-    if(tmp->start <= *offset && *offset + blocksize <= tmp->end + 1)
-    {
+    alloc_data_t *tmp = td_list_entry(search_walker, alloc_data_t, list);
+    if (*offset >= tmp->start && *offset + blocksize <= tmp->end + 1) {
+      *new_current_search_space = tmp;
       file_block_remove_from_sp_aux(tmp, new_current_search_space, offset, blocksize);
       return;
     }
   }
+
+  // RECOVERY: Skip to next valid offset if current is invalid
   td_list_for_each(search_walker, &list_search_space->list)
   {
-    alloc_data_t *tmp;
-    tmp=td_list_entry(search_walker, alloc_data_t, list);
-    if(tmp->start <= *offset && *offset + blocksize <= tmp->end + 1)
-    {
-      file_block_remove_from_sp_aux(tmp, new_current_search_space, offset, blocksize);
-      return ;
-    }
-  }
-
-  log_critical("file_block_remove_from_sp(list_search_space, alloc_data_t **new_current_search_space, uint64_t *offset, const unsigned int blocksize) failed\n");
-
-  // FIXED: Add debugging information and graceful handling instead of crash
-  // AAAAA log_critical("file_block_remove_from_sp failed: offset=%llu, blocksize=%u\n",
-  //              (unsigned long long)*offset, blocksize);
-  // AAAAA log_critical("Search space ranges:\n");
-  // AAAAA td_list_for_each(search_walker, &list_search_space->list)
-  // AAAAA {
-  // AAAAA   alloc_data_t *tmp;
-  // AAAAA   tmp=td_list_entry(search_walker, alloc_data_t, list);
-  // AAAAA   log_critical("  Range: %llu-%llu\n", (unsigned long long)tmp->start, (unsigned long long)tmp->end);
-  // AAAAA }
-  // AAAAA log_critical("Current search space: start=%llu, end=%llu\n",
-  // AAAAA              (unsigned long long)(*new_current_search_space)->start,
-  // AAAAA              (unsigned long long)(*new_current_search_space)->end);
-
-  // FIXED: Instead of crashing, try to gracefully advance offset to next valid range
-  // AAAAA log_warning("Attempting to skip to next valid range instead of crashing\n");
-
-  // Find the next available search space range that comes after this offset
-  alloc_data_t *next_valid = NULL;
-  td_list_for_each(search_walker, &list_search_space->list)
-  {
-    alloc_data_t *tmp;
-    tmp=td_list_entry(search_walker, alloc_data_t, list);
+    alloc_data_t *tmp = td_list_entry(search_walker, alloc_data_t, list);
     if(tmp->start > *offset) {
-      next_valid = tmp;
-      break;
+      *new_current_search_space = tmp;
+      *offset = tmp->start;
+      return;
     }
   }
-
-  if(next_valid) {
-    // AAAAA log_warning("Skipping to next range: %llu-%llu\n",
-    //              (unsigned long long)next_valid->start, (unsigned long long)next_valid->end);
-    *new_current_search_space = next_valid;
-    *offset = next_valid->start;
-    return;
-  }
-
-  // AAAAA log_critical("No valid ranges found after offset %llu, exiting\n", (unsigned long long)*offset);
-  log_flush();
-  exit(1);
 #endif
 }
 
@@ -1374,6 +1332,50 @@ static inline void file_block_add_to_file(alloc_list_t *list, const uint64_t off
 
 void file_block_append(file_recovery_t *file_recovery, alloc_data_t *list_search_space, alloc_data_t **new_current_search_space, uint64_t *offset, const unsigned int blocksize, const unsigned int data)
 {
+  // AAAAA ENHANCED DEBUG: Track every append operation to find corruption source
+  // AAAAA log_trace("APPEND_ENTRY: file=%s, offset=%llu, blocksize=%u, data=%u, current_space=[%llu-%llu]\n",
+  //          file_recovery->filename[0] ? file_recovery->filename : "UNNAMED",
+  //          (unsigned long long)*offset, blocksize, data,
+  //          (unsigned long long)(*new_current_search_space)->start,
+  //          (unsigned long long)(*new_current_search_space)->end);
+
+  // FIXED: Add search space validation before operations
+  // uint64_t current_offset = *offset;
+  // alloc_data_t *current_space = *new_current_search_space;
+
+  // TEMPORARY DISABLE: Validate that offset is within current search space bounds
+  /*if (current_space && current_space != list_search_space) {
+    if (current_offset < current_space->start || current_offset + blocksize > current_space->end + 1) {
+      // AAAAA log_warning("SEARCH_SPACE_VALIDATION: offset %llu not in current space [%llu-%llu], finding correct space\n",
+      //            (unsigned long long)current_offset,
+      //            (unsigned long long)current_space->start,
+      //            (unsigned long long)current_space->end);
+
+      // Find correct search space for this offset
+      struct td_list_head *search_walker = NULL;
+      alloc_data_t *correct_space = NULL;
+
+      td_list_for_each(search_walker, &list_search_space->list) {
+        alloc_data_t *tmp = td_list_entry(search_walker, alloc_data_t, list);
+        if (tmp->start <= current_offset && current_offset + blocksize <= tmp->end + 1) {
+          correct_space = tmp;
+          break;
+        }
+      }
+
+      if (correct_space) {
+        // AAAAA log_warning("SEARCH_SPACE_CORRECTION: corrected to space [%llu-%llu]\n",
+        //              (unsigned long long)correct_space->start,
+        //              (unsigned long long)correct_space->end);
+        *new_current_search_space = correct_space;
+      } else {
+        // AAAAA log_critical("SEARCH_SPACE_ERROR: no valid space found for offset %llu, skipping operation\n",
+        //               (unsigned long long)current_offset);
+        return; // Skip operation instead of crashing
+      }
+    }
+  }*/
+
   file_block_add_to_file(&file_recovery->location, *offset, blocksize, data);
   file_block_remove_from_sp(list_search_space, new_current_search_space, offset, blocksize);
 }

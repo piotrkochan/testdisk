@@ -3575,7 +3575,7 @@ static int main_txt()
   file_stats.not_recovered=0;
   file_stats.recovered=0;
 #if 0
-  register_header_check_txt(&file_stats);
+   register_header_check_txt(&file_stats);
 #endif
   /*@ assert file_recovery.extension == \null; */
   if(header_check_txt(buffer, BLOCKSIZE, 0u, &file_recovery, &file_recovery_new)!=1)
