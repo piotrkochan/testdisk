@@ -185,9 +185,6 @@ static void check_riff_list(file_recovery_t *fr, const unsigned int depth, const
   @*/
 static void file_check_avi(file_recovery_t *fr)
 {
-  if(read_file_data_from_buffer(fr))
-    return;
-
   fr->file_size = 0;
   fr->offset_error=0;
   fr->offset_ok=0;

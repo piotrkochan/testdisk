@@ -70,9 +70,6 @@ struct MIG_HDR
   @*/
 static void file_check_mig(file_recovery_t *file_recovery)
 {
-  if(read_file_data_from_buffer(file_recovery))
-    return;
-
   uint64_t offset=0x34;
   file_recovery->file_size=0;
   /*@

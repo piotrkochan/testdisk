@@ -32,7 +32,6 @@
 #include "filegen.h"
 #include "common.h"
 #include "log.h"
-#include "phbuff.h"
 
 /*@ requires valid_register_header_check(file_stat); */
 static void register_header_check_axx(file_stat_t *file_stat);
@@ -61,9 +60,6 @@ struct SHeader
   @*/
 static void file_check_axx(file_recovery_t *fr)
 {
-  if(read_file_data_from_buffer(fr))
-    return;
-
   uint64_t	offset=0x10;
   /*@
     @ loop assigns *fr->handle, errno, fr->file_size;

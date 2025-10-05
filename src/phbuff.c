@@ -20,6 +20,8 @@
 
  */
 
+#define _GNU_SOURCE  // For fmemopen
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
@@ -584,4 +586,49 @@ uint64_t get_user_max_filesize(void)
 uint64_t get_user_min_filesize(void)
 {
   return global_file_size_filter.min_file_size;
+}
+
+// Memory-aware file handle creation
+// For memory buffering: creates FILE* stream from memory buffer (read-only)
+// For traditional mode: creates regular file handle (write mode)
+FILE* file_recovery_create_handle(file_recovery_t *file_recovery, const char *mode)
+{
+    if (!file_recovery) {
+        return NULL;
+    }
+
+    // If memory buffering is enabled and we're in read mode, use memory buffer
+    if (file_recovery->use_memory_buffering &&
+        (strchr(mode, 'r') != NULL || strchr(mode, '+') != NULL)) {
+
+        // Get data from memory buffer
+        size_t buffer_size = 0;
+        const unsigned char *buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
+
+        if (buffer_data && buffer_size > 0) {
+            // Create FILE* stream from memory buffer using fmemopen()
+            // Use "rb" mode for binary reading from memory
+            FILE *mem_stream = fmemopen((void*)buffer_data, buffer_size, "rb");
+            if (mem_stream) {
+                return mem_stream;
+            }
+            // If fmemopen fails, fall back to traditional file method
+        }
+
+        // If no buffer data yet, fall back to traditional file method
+        // This handles the case where file_check functions are called before
+        // the file is fully recovered and flushed to disk
+    }
+
+    // Traditional mode: create regular file handle
+    // First ensure file exists on disk (may need to flush buffer)
+    if (file_recovery->use_memory_buffering && !file_recovery->handle) {
+        // Need to flush buffer to disk first to create the file
+        if (file_buffer_flush(file_recovery) != 0) {
+            return NULL;
+        }
+    }
+
+    // Create regular file handle
+    return fopen(file_recovery->filename, mode);
 }

@@ -131,9 +131,6 @@ static data_check_t data_check_mlv(const unsigned char *buffer, const unsigned i
   @*/
 static void file_check_mlv(file_recovery_t *file_recovery)
 {
-  if(read_file_data_from_buffer(file_recovery))
-    return;
-
   uint64_t fs=0;
   /*@
     @ loop assigns *file_recovery->handle, errno, file_recovery->file_size;

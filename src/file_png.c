@@ -39,8 +39,6 @@
 #include "common.h"
 #include "filegen.h"
 #include "log.h"
-#include "photorec.h"
-#include "image_filter.h"
 
 extern const file_hint_t file_hint_doc;
 
@@ -53,7 +51,6 @@ const file_hint_t file_hint_png= {
   .max_filesize=PHOTOREC_MAX_FILE_SIZE,
   .recover=1,
   .enable_by_default=1,
-  .is_image=1,
   .register_header_check=&register_header_check_png
 };
 
@@ -121,9 +118,6 @@ static int png_check_ihdr(const struct png_ihdr *ihdr)
   @*/
 static void file_check_png(file_recovery_t *fr)
 {
-  if(read_file_data_from_buffer(fr))
-    return;
-
   if(fr->file_size<fr->calculated_file_size)
   {
     fr->file_size=0;
@@ -174,10 +168,6 @@ static void file_check_png(file_recovery_t *fr)
 	fr->file_size=0;
 	return ;
       }
-      //if(fr->image_filter) {
-      //  fr->image_data.width = be32(ihdr->width);
-      //  fr->image_data.height = be32(ihdr->height);
-      //}
     }
   }
 }
@@ -324,56 +314,38 @@ static int header_check_mng(const unsigned char *buffer, const unsigned int buff
   return 1;
 }
 
-static int png_maches_image_filtering(const unsigned char *buffer, const unsigned int buffer_size, file_recovery_t *file_recovery)
+static void png_maches_image_filtering(file_recovery_t *file_recovery)
 {
-  //if(!file_recovery->image_filter)
-    return 1;
+  unsigned char buffer[1024];
+  unsigned int buffer_size;
 
+  if(!file_recovery->handle)
+    return;
+
+  // Read PNG header from file handle (memory or disk)
+  if(my_fseek(file_recovery->handle, 0, SEEK_SET) < 0)
+    return;
+
+  buffer_size = fread(buffer, 1, sizeof(buffer), file_recovery->handle);
   if(buffer_size < 24)
-    return 1;
+    return;
 
   if(!(buffer[0] == 0x89 && buffer[1] == 'P' && buffer[2] == 'N' && buffer[3] == 'G'))
-    return 1;
+    return;
 
-  const unsigned char *check_buffer = buffer;
-  unsigned int check_size = buffer_size;
-
-  // Estimate file size by finding PNG IEND chunk
-  uint64_t estimated_file_size = 0;
-  if(check_size > 12) {
-    for(unsigned int i = check_size - 12; i > 8; i--)
-    {
-      if(check_buffer[i] == 'I' && check_buffer[i+1] == 'E' && check_buffer[i+2] == 'N' && check_buffer[i+3] == 'D')
-      {
-        estimated_file_size = i + 8; // IEND chunk + 4-byte CRC
-        break;
-      }
-    }
-  }
-
-  // Apply file size filter if we found IEND
-  //if(estimated_file_size > 0 && file_recovery->file_size_filter) {
-  //  if(file_recovery->file_size_filter->min_file_size > 0 && estimated_file_size < file_recovery->file_size_filter->min_file_size)
-  //    return 0;
-  //  if(file_recovery->file_size_filter->max_file_size > 0 && estimated_file_size > file_recovery->file_size_filter->max_file_size)
-  //    return 0;
-  //}
-
-  if(check_size >= 16 + sizeof(struct png_ihdr))
+  if(buffer_size >= 16 + sizeof(struct png_ihdr))
   {
-    const struct png_ihdr *ihdr = (const struct png_ihdr *)&check_buffer[16];
+    const struct png_ihdr *ihdr = (const struct png_ihdr *)&buffer[16];
     const unsigned int width = be32(ihdr->width);
     const unsigned int height = be32(ihdr->height);
     // FIXED: Save dimensions for filtering in file_finish_aux
     file_recovery->image_data.width = width;
     file_recovery->image_data.height = height;
-    log_trace("DEBUG PNG: set dimensions %ux%u for %s\n", width, height, file_recovery->filename);
+    // log_trace("DEBUG PNG: set dimensions %ux%u for %s\n", width, height, file_recovery->filename);
   }
   else {
-    log_trace("DEBUG PNG: buffer too small (%u < %zu) for %s\n", check_size, 16 + sizeof(struct png_ihdr), file_recovery->filename);
+    log_trace("DEBUG PNG: buffer too small (%u < %zu) for %s\n", buffer_size, 16 + sizeof(struct png_ihdr), file_recovery->filename);
   }
-
-  return 1;
 }
 
 /*@
@@ -414,7 +386,6 @@ static int header_check_png(const unsigned char *buffer, const unsigned int buff
   file_recovery_new->data_check=&data_check_png;
   file_recovery_new->file_check=&file_check_png;
   file_recovery_new->file_check_presave=&png_maches_image_filtering;
-  //file_recovery_new->image_filter=file_recovery->image_filter;
   /*@ assert valid_file_recovery(file_recovery_new); */
   return 1;
 }

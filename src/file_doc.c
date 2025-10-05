@@ -42,7 +42,6 @@
 #endif
 #include "setdate.h"
 #include "file_doc.h"
-#include "phbuff.h"
 #if defined(__FRAMAC__)
 #include "__fc_builtin.h"
 #endif
@@ -277,9 +276,6 @@ static int doc_check_entries(const unsigned int uSectorShift, const struct OLE_D
 void file_check_doc_aux(file_recovery_t *file_recovery, const uint64_t offset)
 {
   /*@ assert \valid(file_recovery); */
-  if(read_file_data_from_buffer(file_recovery))
-    return;
-
   unsigned char buffer_header[512];
   uint64_t doc_file_size;
   uint32_t *fat;

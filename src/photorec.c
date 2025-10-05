@@ -675,7 +675,19 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
     { /* Check if recovered file is valid */
       /*@ assert file_recovery->file_check != \null; */
       /*@ assert \valid_function(file_recovery->file_check); */
+
+      // Create handle for file_check - memory-aware (reads from buffer or file)
+      if(!file_recovery->handle) {
+        file_recovery->handle = file_recovery_create_handle(file_recovery, "rb");
+      }
+
       file_recovery->file_check(file_recovery);
+
+      // Close handle after file_check to prevent resource leaks
+      if(file_recovery->handle) {
+        fclose(file_recovery->handle);
+        file_recovery->handle = NULL;
+      }
     }
   /* FIXME: need to adapt read_size to volume size to avoid this */
   if(file_recovery->file_size > params->disk->disk_size)
@@ -797,11 +809,17 @@ int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
 
   // FIXED: Call file_check_presave like file_finish2
   if(file_recovery->file_check_presave) {
-    const unsigned char *buffer_data = NULL;
-    size_t buffer_size = 0;
-    buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
-    if(buffer_data && buffer_size > 0) {
-      file_recovery->file_check_presave(buffer_data, buffer_size, file_recovery);
+    // Create handle for file_check_presave - memory-aware (reads from buffer or file)
+    if(!file_recovery->handle) {
+      file_recovery->handle = file_recovery_create_handle(file_recovery, "rb");
+    }
+
+    if(file_recovery->handle) {
+      file_recovery->file_check_presave(file_recovery);
+
+      // Close handle after file_check_presave to prevent resource leaks
+      fclose(file_recovery->handle);
+      file_recovery->handle = NULL;
     }
   }
 
@@ -855,15 +873,19 @@ pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params,
 
   // FIXED: Call file_check_presave to populate image_data before filtering
   if(file_recovery->file_check_presave) {
-    const unsigned char *buffer_data = NULL;
-    size_t buffer_size = 0;
-    buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
-    // AAAAAAAA log_trace("DEBUG file_check_presave: found=%p, buffer_data=%p, buffer_size=%zu\n",
-    //          file_recovery->file_check_presave, buffer_data, buffer_size);
-    if(buffer_data && buffer_size > 0) {
-      file_recovery->file_check_presave(buffer_data, buffer_size, file_recovery);
+    // Create handle for file_check_presave - memory-aware (reads from buffer or file)
+    if(!file_recovery->handle) {
+      file_recovery->handle = file_recovery_create_handle(file_recovery, "rb");
+    }
+
+    if(file_recovery->handle) {
+      file_recovery->file_check_presave(file_recovery);
       // AAAAAAAA log_trace("DEBUG after presave: width=%u, height=%u\n",
       //          file_recovery->image_data.width, file_recovery->image_data.height);
+
+      // Close handle after file_check_presave to prevent resource leaks
+      fclose(file_recovery->handle);
+      file_recovery->handle = NULL;
     }
   }
 

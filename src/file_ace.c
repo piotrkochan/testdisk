@@ -33,7 +33,6 @@
 #include "common.h"
 #include "log.h"
 #include "crc.h"
-#include "phbuff.h"
 #if defined(__FRAMAC__)
 #include "__fc_builtin.h"
 #endif
@@ -121,9 +120,6 @@ static int check_ace_crc(FILE *handle, const unsigned int len, const unsigned in
   @*/
 static void file_check_ace(file_recovery_t *file_recovery)
 {
-  if(read_file_data_from_buffer(file_recovery))
-    return;
-
   file_recovery->offset_error = 0;
   file_recovery->offset_ok = 0;
   file_recovery->file_size = 0;

@@ -84,9 +84,6 @@ static data_check_t data_check_tib2(const unsigned char *buffer, const unsigned 
   @*/
 static void file_check_tib2(file_recovery_t *file_recovery)
 {
-  if(read_file_data_from_buffer(file_recovery))
-    return;
-
   int64_t file_size;
   if(file_recovery->calculated_file_size < 512)
   {

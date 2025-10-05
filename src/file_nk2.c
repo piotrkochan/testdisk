@@ -196,9 +196,6 @@ static void file_check_nk2_aux(file_recovery_t *fr, const unsigned int entries_c
   @*/
 static void file_check_nk2(file_recovery_t *fr)
 {
-  if(read_file_data_from_buffer(fr))
-    return;
-
   char buf_nk2h[sizeof(nk2Header)];
   const nk2Header *nk2h=(const nk2Header *)&buf_nk2h;
   unsigned int i;
