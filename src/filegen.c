@@ -1477,6 +1477,8 @@ void print_buffer_statistics(void)
                                 buffer_stats.disk_fallback_size +
                                 buffer_stats.disk_fallback_oom;
 
+    // DISABLED: Buffer statistics logging to reduce I/O
+    /*
     if (total_writes > 0) {
         FILE *log_file = fopen("/home/piotr/buffer_stats.json", "a");
         if (log_file) {
@@ -1498,6 +1500,7 @@ void print_buffer_statistics(void)
             fclose(log_file);
         }
     }
+    */
 }
 
 // Get buffer data for file_check functions to work on memory instead of disk
@@ -1653,4 +1656,28 @@ int file_buffer_flush(file_recovery_t *file_recovery)
         idx = file_buffers[idx].next_index;
     }
     return 0; // Buffer not found
+}
+
+// Flush all active buffers - called at program exit
+void flush_all_buffers(void)
+{
+    int flushed_count = 0;
+    int error_count = 0;
+
+    for (int i = 0; i < MAX_FILE_BUFFERS; i++) {
+        if (file_buffers[i].is_active && !file_buffers[i].already_flushed) {
+            if (file_buffer_flush(file_buffers[i].file_recovery_ptr) == 0) {
+                flushed_count++;
+            } else {
+                error_count++;
+            }
+        }
+    }
+
+    if (flushed_count > 0) {
+        log_info("Final flush: %d buffers flushed successfully", flushed_count);
+        if (error_count > 0) {
+            log_warning("Final flush: %d buffers had errors", error_count);
+        }
+    }
 }

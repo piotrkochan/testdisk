@@ -386,6 +386,8 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
   free(buffer_start);
 #endif
 #endif
+  // FIXED: Flush all remaining buffers before exit
+  flush_all_buffers();
 #ifdef HAVE_NCURSES
   photorec_info(stdscr, params->file_stats);
 #endif

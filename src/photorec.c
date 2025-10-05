@@ -719,7 +719,7 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
     }
   }
 
-  // FIXED: Create file handle and flush buffer if file passes all filters
+  // FIXED: Create file handle if file passes all filters (but DON'T flush yet)
   if(file_recovery->file_size > 0) {
     // FIXED: Create file handle now if using memory buffering
     if(file_recovery->use_memory_buffering && !file_recovery->handle) {
@@ -729,11 +729,7 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
         return PFSTATUS_BAD;
       }
     }
-
-    if(file_recovery->handle && file_buffer_flush(file_recovery) < 0) {
-      file_buffer_clear(file_recovery);
-      return PFSTATUS_BAD;
-    }
+    // REMOVED: Premature flush - let files stay in buffer until fully recovered
   }
 
   if(file_recovery->file_size==0)
@@ -759,7 +755,7 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
     }
   }
 #endif
-  file_buffer_flush(file_recovery);  // Only flush when file is successfully completed
+  // REMOVED: Individual file flush - let files accumulate in buffer for batch processing
   if(file_recovery->handle) {
     fclose(file_recovery->handle);
     file_recovery->handle=NULL;
