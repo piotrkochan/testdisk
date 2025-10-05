@@ -72,6 +72,7 @@
 #include "pnext.h"
 #include "phbf.h"
 #include "phnc.h"
+#include "phbuff.h"
 
 //#define DEBUG_BF
 //#define DEBUG_BF2

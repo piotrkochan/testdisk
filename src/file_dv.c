@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include "types.h"
 #include "filegen.h"
+#include "phbuff.h"
 #if defined(__FRAMAC__)
 #include "__fc_builtin.h"
 #endif

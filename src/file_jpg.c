@@ -62,6 +62,7 @@
 #include "file_tiff.h"
 #include "setdate.h"
 #include "image_filter.h"
+#include "phbuff.h"
 #if defined(__FRAMAC__)
 #include "__fc_builtin.h"
 #endif

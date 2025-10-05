@@ -32,6 +32,7 @@
 #include "filegen.h"
 #include "common.h"
 #include "log.h"
+#include "phbuff.h"
 
 /*@ requires valid_register_header_check(file_stat); */
 static void register_header_check_axx(file_stat_t *file_stat);

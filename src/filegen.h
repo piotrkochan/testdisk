@@ -501,25 +501,6 @@ time_t get_time_from_YYYYMMDD_HHMMSS(const char *date_asc);
   @*/
 void get_prev_location_smart(const alloc_data_t *list_search_space, alloc_data_t **current_search_space, uint64_t *offset, const uint64_t prev_location);
 
-// Memory buffer management functions
-int file_buffer_start_for_recovery(file_recovery_t *file_recovery);
-void file_buffer_finish_for_recovery(file_recovery_t *file_recovery);
-
-// Buffered fwrite function
-size_t buffered_fwrite(const void *data, size_t size, size_t count,
-                      FILE *handle, file_recovery_t *file_recovery);
-
-// File buffer functions for recovered file data only
-int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t size);
-int file_buffer_flush(file_recovery_t *file_recovery);
-void flush_all_buffers(void);
-int file_buffer_clear(file_recovery_t *file_recovery);
-const unsigned char* file_buffer_get_data(file_recovery_t *file_recovery, size_t *buffer_size);
-int read_file_data_from_buffer(file_recovery_t *file_recovery);
-void print_buffer_statistics(void);
-void set_global_file_size_filter(const file_size_filter_t *filter);
-uint64_t get_user_min_filesize(void);
-uint64_t get_user_max_filesize(void);
 
 #ifdef __cplusplus
 } /* closing brace for extern "C" */

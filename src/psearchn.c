@@ -74,6 +74,7 @@
 #include "psearchn.h"
 #include "photorec_check_header.h"
 #include "json_log.h"
+#include "phbuff.h"
 #define READ_SIZE 1024*512
 extern int need_to_stop;
 

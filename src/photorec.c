@@ -73,6 +73,7 @@
 #include "setdate.h"
 #include "dfxml.h"
 #include "image_filter.h"
+#include "phbuff.h"
 
 /* #define DEBUG_FILE_FINISH */
 /* #define DEBUG_UPDATE_SEARCH_SPACE */
