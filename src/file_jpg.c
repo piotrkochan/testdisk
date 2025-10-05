@@ -2154,7 +2154,8 @@ static void jpg_save_thumbnail(const file_recovery_t *file_recovery, const char 
     //   thumb_size < file_recovery->file_size_filter->min_file_size)
     //  return;
 #ifndef DISABLED_FOR_FRAMAC
-    if((out=fopen(thumbname,"wb"))!=NULL)
+    // FIXED: Skip thumbnail extraction during memory buffering
+    if(!file_recovery->use_memory_buffering && (out=fopen(thumbname,"wb"))!=NULL)
     {
       /*@ assert \valid_read(buffer + (0 .. nbytes - 1)); */
       /*@ assert 0 <= thumb_offset < nbytes; */

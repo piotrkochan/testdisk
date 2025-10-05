@@ -719,18 +719,8 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
     }
   }
 
-  // FIXED: Create file handle if file passes all filters (but DON'T flush yet)
-  if(file_recovery->file_size > 0) {
-    // FIXED: Create file handle now if using memory buffering
-    if(file_recovery->use_memory_buffering && !file_recovery->handle) {
-      if(!(file_recovery->handle=fopen(file_recovery->filename,"w+b"))) {
-        log_critical("Cannot create file %s: %s\n", file_recovery->filename, strerror(errno));
-        file_buffer_clear(file_recovery);
-        return PFSTATUS_BAD;
-      }
-    }
-    // REMOVED: Premature flush - let files stay in buffer until fully recovered
-  }
+  // FIXED: No file creation during memory buffering - files stay in RAM until flush
+  // REMOVED: All premature file handle creation and flushing
 
   if(file_recovery->file_size==0)
   {
@@ -755,7 +745,10 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
     }
   }
 #endif
-  // REMOVED: Individual file flush - let files accumulate in buffer for batch processing
+  // FIXED: Flush individual files to disk so they're visible during recovery
+  if(file_recovery->use_memory_buffering) {
+    file_buffer_flush(file_recovery);
+  }
   if(file_recovery->handle) {
     fclose(file_recovery->handle);
     file_recovery->handle=NULL;

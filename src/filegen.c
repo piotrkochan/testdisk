@@ -350,6 +350,9 @@ void file_allow_nl(file_recovery_t *file_recovery, const unsigned int nl_mode)
     /*@ assert valid_file_check_result(file_recovery); */
     return ;
   }
+  /* Check if handle is valid before attempting to seek */
+  if(file_recovery->handle == NULL)
+    return ;
   /*@ assert \valid(file_recovery->handle); */
   if(my_fseek(file_recovery->handle, file_recovery->file_size,SEEK_SET)<0)
   {
@@ -439,6 +442,9 @@ void file_search_footer(file_recovery_t *file_recovery, const void*footer, const
 {
   /*@ assert \valid(file_recovery); */
   if(footer_length==0 || file_recovery->file_size <= extra_length)
+    return ;
+  /* Check if handle is valid before attempting to search */
+  if(file_recovery->handle == NULL)
     return ;
   file_recovery->file_size=file_rsearch(file_recovery->handle, file_recovery->file_size-extra_length, footer, footer_length);
   /*@ assert 0 < footer_length < 4096; */
@@ -1274,7 +1280,7 @@ static uint64_t get_max_filesize_for_buffer(file_recovery_t *file_recovery)
 }
 
 // Memory buffer for each file recovery with hash table lookup
-#define MAX_FILE_BUFFERS 100
+#define MAX_FILE_BUFFERS 10000  // FIXED: Increased for better buffering
 #define HASH_TABLE_SIZE 211 // Prime number for better distribution
 
 // Statistics for monitoring buffer vs disk usage
@@ -1287,6 +1293,7 @@ static struct {
 
 static struct {
     file_recovery_t *file_recovery_ptr;  // FIXED: Use file_recovery pointer as stable key
+    char filename[2048];                 // FIXED: Store filename copy to avoid segfaults
     unsigned char *buffer;
     size_t buffer_size;
     size_t buffer_capacity;
@@ -1319,6 +1326,7 @@ static void init_buffer_hash_table(void) {
             file_buffers[i].next_index = -1;
             file_buffers[i].is_active = 0;    // FIXED: Initialize as inactive
             file_buffers[i].file_recovery_ptr = NULL;
+            file_buffers[i].filename[0] = '\0'; // FIXED: Initialize filename
         }
         initialized = 1;
     }
@@ -1331,6 +1339,11 @@ static int get_buffer_index(file_recovery_t *file_recovery)
     int idx;
     int i;
     uint64_t max_filesize;
+
+    // FIXED: Safety check
+    if (!file_recovery) {
+        return -1;
+    }
 
     init_buffer_hash_table();
 
@@ -1359,6 +1372,10 @@ static int get_buffer_index(file_recovery_t *file_recovery)
     // Initialize new buffer slot
     file_buffers[i].file_recovery_ptr = file_recovery;
     file_buffers[i].is_active = 1;
+
+    // FIXED: Copy filename to buffer for safe access during flush
+    strncpy(file_buffers[i].filename, file_recovery->filename, sizeof(file_buffers[i].filename) - 1);
+    file_buffers[i].filename[sizeof(file_buffers[i].filename) - 1] = '\0';
 
     // Smart initial allocation based on file type
     max_filesize = get_max_filesize_for_buffer(file_recovery);
@@ -1400,11 +1417,10 @@ int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t s
 
     idx = get_buffer_index(file_recovery);
     if (idx < 0) {
-        // Fallback to direct write if buffer fails
+        // FALLBACK: Buffer table full - writing to disk
         buffer_stats.disk_fallback_full++;
+        log_info("FALLBACK: Buffer table full for %s - writing to disk", file_recovery->filename);
         if (!file_recovery->handle) return -1;
-
-        // FIXED: Removed filesize filtering - let file_finish_aux handle all filtering
         return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
     }
 
@@ -1413,14 +1429,15 @@ int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t s
     // Check if we exceed max file size for this file type (fallback behavior when no user limits)
     max_filesize = get_max_filesize_for_buffer(file_recovery);
     if (file_buffers[idx].buffer_size + size > max_filesize) {
-        // File too large for buffer, fallback to direct write (only when no user limits set)
+        // FALLBACK: File too large for buffer - writing to disk
+        buffer_stats.disk_fallback_size++;
+        log_info("FALLBACK: File %s too large (%llu bytes) - writing to disk",
+                 file_recovery->filename, (unsigned long long)(file_buffers[idx].buffer_size + size));
         if (!has_user_filesize_limits()) {
-            buffer_stats.disk_fallback_size++;
             if (!file_recovery->handle) return -1;
             return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
         } else {
-            // User has limits set - this should have been caught above, but safety check
-            return 0;
+            return 0; // Skip writing when user has size limits
         }
     }
 
@@ -1438,8 +1455,10 @@ int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t s
 
         unsigned char *new_buffer = realloc(file_buffers[idx].buffer, new_capacity);
         if (!new_buffer) {
-            // Fallback to direct write
+            // FALLBACK: Out of memory - writing to disk
             buffer_stats.disk_fallback_oom++;
+            log_info("FALLBACK: Out of memory for %s (tried %zu bytes) - writing to disk",
+                     file_recovery->filename, new_capacity);
             if (!file_recovery->handle) return -1;
             return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
         }
@@ -1619,8 +1638,18 @@ int file_buffer_flush(file_recovery_t *file_recovery)
     // Search collision chain
     while (idx != -1) {
         if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery) {
-            // FIXED: Always write to disk - let file_finish_aux handle filtering
-            if (file_recovery->handle && file_buffers[idx].buffer_size > 0 && !file_buffers[idx].already_flushed) {
+            // FIXED: Create file handle if needed and write buffer to disk
+            if (file_buffers[idx].buffer_size > 0 && !file_buffers[idx].already_flushed) {
+                // Create file handle if it doesn't exist
+                if (!file_recovery->handle) {
+                    file_recovery->handle = fopen(file_recovery->filename, "w+b");
+                    if (!file_recovery->handle) {
+                        log_critical("Cannot create file %s during flush: %s\n",
+                                   file_recovery->filename, strerror(errno));
+                        return -1;
+                    }
+                }
+
                 if (fwrite(file_buffers[idx].buffer, 1, file_buffers[idx].buffer_size,
                           file_recovery->handle) != file_buffers[idx].buffer_size) {
                     return -1;
@@ -1675,7 +1704,7 @@ void flush_all_buffers(void)
     }
 
     if (flushed_count > 0) {
-        log_info("Final flush: %d buffers flushed successfully", flushed_count);
+        // log_info("Final flush: %d buffers flushed successfully", flushed_count);
         if (error_count > 0) {
             log_warning("Final flush: %d buffers had errors", error_count);
         }

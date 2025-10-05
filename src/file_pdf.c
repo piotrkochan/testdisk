@@ -274,6 +274,9 @@ static void file_date_pdf(file_recovery_t *file_recovery)
   char buffer[4096];
   if(file_recovery->file_size > PHOTOREC_MAX_FILE_SIZE)
     return ;
+  /* Check if handle is valid before attempting to seek */
+  if(file_recovery->handle == NULL)
+    return ;
   /*@ assert file_recovery->file_size <= PHOTOREC_MAX_FILE_SIZE; */
   if(my_fseek(file_recovery->handle, 0, SEEK_SET)<0)
   {

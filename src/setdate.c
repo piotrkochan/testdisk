@@ -32,6 +32,7 @@
 #include <utime.h>
 #endif
 #include <stdio.h>
+#include <sys/stat.h>
 #include "log.h"
 #include "setdate.h"
 
@@ -50,8 +51,15 @@ int set_date(const char *pathname, time_t actime, time_t modtime)
 {
 #ifdef HAVE_UTIME
   struct utimbuf ut;
+  struct stat st;
   if (!pathname)
     return -1;
+  /* Check if file exists before attempting to set date/time */
+  if (stat(pathname, &st) != 0) {
+    /* File doesn't exist - silently return success since this is expected
+       during memory buffering when files are flushed later */
+    return 0;
+  }
   ut.actime  = actime;
   ut.modtime = modtime;
   if (utime(pathname, &ut)) {
