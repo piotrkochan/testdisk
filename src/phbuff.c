@@ -20,7 +20,7 @@
 
  */
 
-#define _GNU_SOURCE  // For fmemopen
+#define _GNU_SOURCE // For fopencookie
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -48,83 +48,179 @@
 #define MAX_FILE_BUFFERS 30
 #define HASH_TABLE_SIZE 31 // Prime number for better distribution
 
+// Cookie structure for fopencookie - tracks position in buffer
+typedef struct {
+  int buffer_idx;      // Index into file_buffers array
+  off64_t position;    // Current read position in buffer
+} buffer_cookie_t;
+
 // Enhanced statistics for monitoring buffer vs disk usage
-static struct {
-    unsigned long buffer_writes;      // Successful buffer writes
-    unsigned long disk_fallback_full; // Fallback due to buffer pool full
-    unsigned long disk_fallback_size; // Fallback due to file too large
-    unsigned long disk_fallback_oom;  // Fallback due to malloc/realloc failure
-    unsigned long hash_collisions;    // NEW: Hash collision count
-    unsigned long max_chain_length;   // NEW: Longest collision chain
-    unsigned long memory_usage;       // NEW: Current memory usage
-    unsigned long realloc_count;      // NEW: Number of buffer reallocations
+static struct
+{
+  unsigned long buffer_writes;      // Successful buffer writes
+  unsigned long disk_fallback_full; // Fallback due to buffer pool full
+  unsigned long disk_fallback_size; // Fallback due to file too large
+  unsigned long disk_fallback_oom;  // Fallback due to malloc/realloc failure
+  unsigned long hash_collisions;    // NEW: Hash collision count
+  unsigned long max_chain_length;   // NEW: Longest collision chain
+  unsigned long memory_usage;       // NEW: Current memory usage
+  unsigned long realloc_count;      // NEW: Number of buffer reallocations
 } buffer_stats = {0, 0, 0, 0, 0, 0, 0, 0};
 
-static struct {
-    file_recovery_t *file_recovery_ptr;  // Use file_recovery pointer as stable key
-    char filename[2048];                 // Store filename copy to avoid segfaults
-    unsigned char *buffer;
-    size_t buffer_size;
-    size_t buffer_capacity;
-    int next_index; // For collision chaining, -1 means end of chain
-    int already_flushed;  // Flag to prevent double-writing
-    int is_active;      // Mark if buffer slot is active (1) or free (0)
+static struct
+{
+  file_recovery_t *file_recovery_ptr; // Use file_recovery pointer as stable key
+  char filename[2048];                // Store filename copy to avoid segfaults
+  unsigned char *buffer;
+  size_t buffer_size;
+  size_t buffer_capacity;
+  FILE *read_handle;   // File handle for reading from buffer (fopencookie)
+  FILE *save_handle;   // File handle for saving buffer to disk
+  int next_index;      // For collision chaining, -1 means end of chain
+  int already_flushed; // Flag to prevent double-writing
+  int is_active;       // Mark if buffer slot is active (1) or free (0)
 } file_buffers[MAX_FILE_BUFFERS];
 
 static int hash_table[HASH_TABLE_SIZE]; // Index into file_buffers, -1 means empty
+
+// OPTIMIZATION: Free list for fast buffer allocation
+static int free_list_head = -1; // Head of free slots linked list, -1 means empty
 
 // Global file size filter for all recovery operations (copy, not pointer!)
 static file_size_filter_t global_file_size_filter = {0, 0};
 
 // Fast simple hash function for performance
-static int hash_file_recovery(file_recovery_t *file_recovery) {
-    uintptr_t ptr = (uintptr_t)file_recovery;
-    uint32_t high = (uint32_t)(ptr >> 32);
-    uint32_t low = (uint32_t)(ptr & 0xFFFFFFFF);
-    unsigned int hash = high ^ low;
-    return hash % HASH_TABLE_SIZE;
+static int hash_file_recovery(file_recovery_t *file_recovery)
+{
+  uintptr_t ptr = (uintptr_t)file_recovery;
+  uint32_t high = (uint32_t)(ptr >> 32);
+  uint32_t low = (uint32_t)(ptr & 0xFFFFFFFF);
+  unsigned int hash = high ^ low;
+  return hash % HASH_TABLE_SIZE;
+}
+
+// Custom I/O functions for fopencookie - reading from memory buffer
+static ssize_t buffer_read(void *cookie, char *buf, size_t size)
+{
+  buffer_cookie_t *bc = (buffer_cookie_t *)cookie;
+  int idx = bc->buffer_idx;
+
+  // Safety checks
+  if (idx < 0 || idx >= MAX_FILE_BUFFERS || !file_buffers[idx].is_active)
+    return -1;
+
+  // Calculate how much can be read (not more than buffer_size)
+  size_t available = file_buffers[idx].buffer_size - bc->position;
+  size_t to_read = (size < available) ? size : available;
+
+  if (to_read > 0)
+  {
+    memcpy(buf, file_buffers[idx].buffer + bc->position, to_read);
+    bc->position += to_read;
+  }
+
+  return to_read; // Returns 0 when EOF (position >= buffer_size)
+}
+
+// Custom seek function - SEEK_END points to buffer_size (not capacity!)
+static int buffer_seek(void *cookie, off64_t *offset, int whence)
+{
+  buffer_cookie_t *bc = (buffer_cookie_t *)cookie;
+  int idx = bc->buffer_idx;
+
+  // Safety checks
+  if (idx < 0 || idx >= MAX_FILE_BUFFERS || !file_buffers[idx].is_active)
+    return -1;
+
+  off64_t new_pos;
+  switch (whence)
+  {
+  case SEEK_SET:
+    new_pos = *offset;
+    break;
+  case SEEK_CUR:
+    new_pos = bc->position + *offset;
+    break;
+  case SEEK_END:
+    new_pos = file_buffers[idx].buffer_size + *offset; // EOF = buffer_size!
+    break;
+  default:
+    return -1;
+  }
+
+  // Clamp to [0, buffer_size]
+  if (new_pos < 0)
+    new_pos = 0;
+  if ((size_t)new_pos > file_buffers[idx].buffer_size)
+    new_pos = file_buffers[idx].buffer_size;
+
+  bc->position = new_pos;
+  *offset = new_pos;
+  return 0;
+}
+
+// Custom close function - cleanup cookie
+static int buffer_close(void *cookie)
+{
+  free(cookie);
+  return 0;
 }
 
 // Initialize hash table (call once at startup)
-static void init_buffer_hash_table(void) {
-    static int initialized = 0;
-    if (!initialized) {
-        for (int i = 0; i < HASH_TABLE_SIZE; i++) {
-            hash_table[i] = -1;
-        }
-        for (int i = 0; i < MAX_FILE_BUFFERS; i++) {
-            file_buffers[i].next_index = -1;
-            file_buffers[i].is_active = 0;
-            file_buffers[i].file_recovery_ptr = NULL;
-            file_buffers[i].filename[0] = '\0';
-            file_buffers[i].buffer = NULL;  // IMPORTANT: Initialize to NULL
-            file_buffers[i].buffer_size = 0;
-            file_buffers[i].buffer_capacity = 0;
-            file_buffers[i].already_flushed = 0;
-        }
-        initialized = 1;
+static void init_buffer_hash_table(void)
+{
+  static int initialized = 0;
+  if (!initialized)
+  {
+    for (int i = 0; i < HASH_TABLE_SIZE; i++)
+    {
+      hash_table[i] = -1;
     }
+    // OPTIMIZATION: Build free list during initialization
+    for (int i = 0; i < MAX_FILE_BUFFERS; i++)
+    {
+      file_buffers[i].next_index = (i + 1 < MAX_FILE_BUFFERS) ? i + 1 : -1; // Link to next free slot
+      file_buffers[i].is_active = 0;
+      file_buffers[i].file_recovery_ptr = NULL;
+      file_buffers[i].filename[0] = '\0';
+      file_buffers[i].buffer = NULL; // IMPORTANT: Initialize to NULL
+      file_buffers[i].buffer_size = 0;
+      file_buffers[i].buffer_capacity = 0;
+      file_buffers[i].read_handle = NULL; // Initialize read_handle to NULL
+      file_buffers[i].save_handle = NULL; // Initialize save_handle to NULL
+      file_buffers[i].already_flushed = 0;
+    }
+    free_list_head = 0; // Point to first free slot
+    initialized = 1;
+  }
 }
 
-// Get max file size for this file type (respects user limits)
-static uint64_t get_max_filesize_for_buffer(file_recovery_t *file_recovery)
+// Get buffer size based on file type hint only (NOT user filesize filter)
+// Priority: file_hint->max_filesize > 1GB default
+// HARD LIMIT: Never allocate more than 10GB
+static uint64_t get_buffer_size_for_file(file_recovery_t *file_recovery)
 {
-  // Start with file type's limit
-  uint64_t type_max = PHOTOREC_MAX_FILE_SIZE; // Global default
-  uint64_t user_max;
+  uint64_t type_max = 1024ULL * 1024 * 1024;        // 1GB default
+  uint64_t hard_limit = 10ULL * 1024 * 1024 * 1024; // 10GB hard limit
+  uint64_t result;
 
-  if(file_recovery->file_stat && file_recovery->file_stat->file_hint &&
-     file_recovery->file_stat->file_hint->max_filesize > 0) {
+  // Get file type's max size if available
+  if (file_recovery->file_stat &&
+      file_recovery->file_stat->file_hint &&
+      file_recovery->file_stat->file_hint->max_filesize > 0)
+  {
     type_max = file_recovery->file_stat->file_hint->max_filesize;
   }
 
-  // If user has max limit, use the smaller of the two
-  user_max = get_user_max_filesize();
-  if (user_max > 0 && user_max < type_max) {
-    return user_max;
+  result = type_max;
+
+  // NEVER exceed 10GB hard limit
+  if (result > hard_limit)
+  {
+    result = hard_limit;
   }
 
-  return type_max;
+  return result;
 }
 
 // Check if user has filesize filters active
@@ -137,276 +233,268 @@ static int has_user_filesize_limits(void)
 // IMPROVED: Buffer management with better error handling
 static int get_buffer_index(file_recovery_t *file_recovery)
 {
-    int hash;
-    int idx;
-    int i;
-    uint64_t max_filesize;
-    int chain_length = 0;  // Track collision chain length
+  int hash;
+  int idx;
+  int i;
+  uint64_t max_filesize;
+  int chain_length = 0; // Track collision chain length
 
-    // Safety check
-    if (!file_recovery) {
-        return -1;
-    }
+  // Safety check
+  if (!file_recovery)
+  {
+    return -1;
+  }
 
-    init_buffer_hash_table();
+  init_buffer_hash_table();
 
-    hash = hash_file_recovery(file_recovery);
-    idx = hash_table[hash];
+  hash = hash_file_recovery(file_recovery);
+  idx = hash_table[hash];
 
-    // Search collision chain for existing buffer
-    while (idx != -1) {
-        chain_length++;
-        if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery) {
-            return idx;
-        }
-        idx = file_buffers[idx].next_index;
-    }
-
-    // Update collision statistics (disabled for performance)
-    // if (chain_length > 0) {
-    //     buffer_stats.hash_collisions++;
-    //     if (chain_length > buffer_stats.max_chain_length) {
-    //         buffer_stats.max_chain_length = chain_length;
-    //     }
-    // }
-
-    // Find free slot in buffer array
-    for (i = 0; i < MAX_FILE_BUFFERS; i++) {
-        if (!file_buffers[i].is_active) {
-            break;
-        }
-    }
-
-    if (i >= MAX_FILE_BUFFERS) {
-        return -1; // No free slots
-    }
-
-    // Initialize new buffer slot
-    file_buffers[i].file_recovery_ptr = file_recovery;
-    file_buffers[i].is_active = 1;
-
-    // Copy filename to buffer for safe access during flush
-    strncpy(file_buffers[i].filename, file_recovery->filename, sizeof(file_buffers[i].filename) - 1);
-    file_buffers[i].filename[sizeof(file_buffers[i].filename) - 1] = '\0';
-
-    // Smart initial allocation based on file type
-    max_filesize = get_max_filesize_for_buffer(file_recovery);
+  // Search collision chain for existing buffer
+  while (idx != -1)
+  {
+    chain_length++;
+    if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery)
     {
-        size_t initial_size = (max_filesize > 1024*1024) ? 1024*1024 : (size_t)max_filesize; // Start with 1MB or file max, whichever is smaller
+      return idx;
+    }
+    idx = file_buffers[idx].next_index;
+  }
 
-        // Use calloc for safety (zero-initialized memory)
-        file_buffers[i].buffer = calloc(1, initial_size);
-        file_buffers[i].buffer_size = 0;
-        file_buffers[i].buffer_capacity = initial_size;
-        file_buffers[i].next_index = -1;
-        file_buffers[i].already_flushed = 0;
+  // Update collision statistics (disabled for performance)
+  // if (chain_length > 0) {
+  //     buffer_stats.hash_collisions++;
+  //     if (chain_length > buffer_stats.max_chain_length) {
+  //         buffer_stats.max_chain_length = chain_length;
+  //     }
+  // }
+
+  // OPTIMIZATION: Get free slot from free list (O(1) instead of O(N))
+  if (free_list_head == -1)
+  {
+    log_critical("BUFFER POOL FULL: Cannot allocate buffer for %s (max=%d)\n",
+                 file_recovery->filename, MAX_FILE_BUFFERS);
+    return -1; // No free slots
+  }
+
+  i = free_list_head;
+  free_list_head = file_buffers[i].next_index; // Remove from free list
+
+  // Initialize new buffer slot
+  file_buffers[i].file_recovery_ptr = file_recovery;
+  file_buffers[i].is_active = 1;
+
+  // Copy filename to buffer for safe access during flush
+  strncpy(file_buffers[i].filename, file_recovery->filename, sizeof(file_buffers[i].filename) - 1);
+  file_buffers[i].filename[sizeof(file_buffers[i].filename) - 1] = '\0';
+
+  // FIXED: Allocate EXACT buffer size based on filesize filter (no resizing!)
+  max_filesize = get_buffer_size_for_file(file_recovery);
+  {
+    size_t buffer_size = (size_t)max_filesize;
+
+    // Use calloc for safety (zero-initialized memory)
+    file_buffers[i].buffer = calloc(1, buffer_size);
+    file_buffers[i].buffer_size = 0;
+    file_buffers[i].buffer_capacity = buffer_size;
+    file_buffers[i].save_handle = NULL; // Initialize save_handle to NULL
+    file_buffers[i].next_index = -1;
+    file_buffers[i].already_flushed = 0;
+
+    if (!file_buffers[i].buffer)
+    {
+      log_critical("BUFFER ALLOC FAILED: Cannot allocate %llu bytes for %s\n",
+                   (unsigned long long)buffer_size, file_recovery->filename);
+      file_buffers[i].is_active = 0; // Mark as inactive on failure
+      // OPTIMIZATION: Add back to free list on allocation failure
+      file_buffers[i].next_index = free_list_head;
+      free_list_head = i;
+      return -1;
     }
 
-    if (!file_buffers[i].buffer) {
-        file_buffers[i].is_active = 0;  // Mark as inactive on failure
-        return -1;
+    // Create read_handle using fopencookie for memory buffer reading
+    buffer_cookie_t *cookie = malloc(sizeof(buffer_cookie_t));
+    if (!cookie)
+    {
+      log_critical("COOKIE ALLOC FAILED for %s\n", file_recovery->filename);
+      free(file_buffers[i].buffer);
+      file_buffers[i].buffer = NULL;
+      file_buffers[i].is_active = 0;
+      // OPTIMIZATION: Add back to free list on cookie allocation failure
+      file_buffers[i].next_index = free_list_head;
+      free_list_head = i;
+      return -1;
     }
 
-    // Update memory usage statistics (disabled for performance)
-    // buffer_stats.memory_usage += file_buffers[i].buffer_capacity;
+    cookie->buffer_idx = i;
+    cookie->position = 0;
 
-    // Add to hash table (insert at head of collision chain)
-    file_buffers[i].next_index = hash_table[hash];
-    hash_table[hash] = i;
+    // Define I/O operations for fopencookie
+    cookie_io_functions_t io_funcs = {
+        .read = buffer_read,
+        .write = NULL, // Read-only
+        .seek = buffer_seek,
+        .close = buffer_close};
 
-    return i;
+    // Create read_handle - opened ONCE for the lifetime of buffer
+    file_buffers[i].read_handle = fopencookie(cookie, "rb", io_funcs);
+    if (!file_buffers[i].read_handle)
+    {
+      log_critical("FOPENCOOKIE FAILED for %s\n", file_recovery->filename);
+      free(cookie);
+      free(file_buffers[i].buffer);
+      file_buffers[i].buffer = NULL;
+      file_buffers[i].is_active = 0;
+      // OPTIMIZATION: Add back to free list on fopencookie failure
+      file_buffers[i].next_index = free_list_head;
+      free_list_head = i;
+      return -1;
+    }
+  }
+
+  // Update memory usage statistics (disabled for performance)
+  // buffer_stats.memory_usage += file_buffers[i].buffer_capacity;
+
+  // Add to hash table (insert at head of collision chain)
+  file_buffers[i].next_index = hash_table[hash];
+  hash_table[hash] = i;
+
+  return i;
 }
 
-// Memory buffer writing with improved error handling
+// Memory buffer writing - FIXED: No resizing, strict bounds checking
 int file_buffer_write(file_recovery_t *file_recovery, const void *data, size_t size)
 {
-    int idx;
-    uint64_t max_filesize;
+  int idx;
 
-    if (!file_recovery || !data || size == 0) {
-        return -1;
-    }
+  if (!file_recovery || !data || size == 0)
+  {
+    return -1;
+  }
 
-    // PERFORMANCE: Quick fallback to disk for large files without user filters
-    if (!has_user_filesize_limits() && size > 1024*1024) {
-        // Large file without filters - write directly to disk
-        if (!file_recovery->handle) return -1;
-        return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
-    }
+  idx = get_buffer_index(file_recovery);
+  if (idx < 0)
+  {
+    // FALLBACK: Buffer table full - reject file
+    buffer_stats.disk_fallback_full++;
+    return -1;
+  }
 
-    idx = get_buffer_index(file_recovery);
-    if (idx < 0) {
-        // FALLBACK: Buffer table full - writing to disk
-        buffer_stats.disk_fallback_full++;
-        log_info("FALLBACK: Buffer table full for %s - writing to disk", file_recovery->filename);
-        if (!file_recovery->handle) return -1;
-        return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
-    }
+  // FIXED: No resizing - if data doesn't fit, reject the file
+  if (file_buffers[idx].buffer_size + size > file_buffers[idx].buffer_capacity)
+  {
+    // File exceeds buffer capacity - reject it
+    buffer_stats.disk_fallback_size++;
+    return -1;
+  }
 
-    // Check if we exceed max file size for this file type (fallback behavior when no user limits)
-    max_filesize = get_max_filesize_for_buffer(file_recovery);
-    if (file_buffers[idx].buffer_size + size > max_filesize) {
-        // FALLBACK: File too large for buffer - writing to disk
-        buffer_stats.disk_fallback_size++;
-        log_info("FALLBACK: File %s too large (%llu bytes) - writing to disk",
-                 file_recovery->filename, (unsigned long long)(file_buffers[idx].buffer_size + size));
-        if (!has_user_filesize_limits()) {
-            if (!file_recovery->handle) return -1;
-            return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
-        } else {
-            return 0; // Skip writing when user has size limits
-        }
-    }
+  // Add to buffer
+  memcpy(file_buffers[idx].buffer + file_buffers[idx].buffer_size, data, size);
+  file_buffers[idx].buffer_size += size;
 
-    // IMPROVED: Better bounds checking before realloc
-    if (file_buffers[idx].buffer_size + size > file_buffers[idx].buffer_capacity) {
-        // Instead of doubling, grow by chunks but respect max_filesize
-        size_t chunk_size = (max_filesize > 10*1024*1024) ? 1024*1024 : max_filesize/4; // 1MB or 25% of max
-        size_t needed = file_buffers[idx].buffer_size + size;
-        size_t new_capacity = ((needed + chunk_size - 1) / chunk_size) * chunk_size; // Round up to chunk boundary
+  buffer_stats.buffer_writes++;
 
-        // Cap at max_filesize
-        if (new_capacity > max_filesize) {
-            new_capacity = max_filesize;
-        }
-
-        // IMPROVED: Check if realloc is actually needed
-        if (new_capacity <= file_buffers[idx].buffer_capacity) {
-            log_critical("Buffer capacity insufficient for file %s", file_recovery->filename);
-            return -1;
-        }
-
-        unsigned char *new_buffer = realloc(file_buffers[idx].buffer, new_capacity);
-        if (!new_buffer) {
-            // FALLBACK: Out of memory - writing to disk
-            buffer_stats.disk_fallback_oom++;
-            log_info("FALLBACK: Out of memory for %s (tried %zu bytes) - writing to disk",
-                     file_recovery->filename, new_capacity);
-            if (!file_recovery->handle) return -1;
-            return (fwrite(data, 1, size, file_recovery->handle) == size) ? 0 : -1;
-        }
-
-        // Update memory usage statistics (disabled for performance)
-        // buffer_stats.memory_usage += new_capacity - file_buffers[idx].buffer_capacity;
-        // buffer_stats.realloc_count++;
-
-        file_buffers[idx].buffer = new_buffer;
-        file_buffers[idx].buffer_capacity = new_capacity;
-    }
-
-    // IMPROVED: Double-check bounds before memcpy
-    if (file_buffers[idx].buffer_size + size > file_buffers[idx].buffer_capacity) {
-        log_critical("Buffer overflow prevented for file %s", file_recovery->filename);
-        return -1;
-    }
-
-    // Add to buffer
-    memcpy(file_buffers[idx].buffer + file_buffers[idx].buffer_size, data, size);
-    file_buffers[idx].buffer_size += size;
-
-    buffer_stats.buffer_writes++;
-
-    // Log stats periodically (disabled for performance)
-    // print_buffer_statistics();
-
-    return 0;
+  return 0;
 }
 
 // Print enhanced buffer statistics as JSON to log file
 void print_buffer_statistics(void)
 {
-    static time_t last_log_time = 0;
-    time_t current_time = time(NULL);
+  static time_t last_log_time = 0;
+  time_t current_time = time(NULL);
 
-    // Log every 5 seconds
-    if (current_time - last_log_time < 5) {
-        return;
-    }
-    last_log_time = current_time;
+  // Log every 5 seconds
+  if (current_time - last_log_time < 5)
+  {
+    return;
+  }
+  last_log_time = current_time;
 
-    unsigned long total_writes = buffer_stats.buffer_writes +
-                                buffer_stats.disk_fallback_full +
-                                buffer_stats.disk_fallback_size +
-                                buffer_stats.disk_fallback_oom;
+  unsigned long total_writes = buffer_stats.buffer_writes +
+                               buffer_stats.disk_fallback_full +
+                               buffer_stats.disk_fallback_size +
+                               buffer_stats.disk_fallback_oom;
 
-    // DISABLED: Buffer statistics logging to reduce I/O
-    /*
-    if (total_writes > 0) {
-        FILE *log_file = fopen("/home/piotr/buffer_stats.json", "a");
-        if (log_file) {
-            fprintf(log_file,
-                "{\"timestamp\":%ld,"
-                "\"buffer_writes\":%lu,"
-                "\"disk_fallback_full\":%lu,"
-                "\"disk_fallback_size\":%lu,"
-                "\"disk_fallback_oom\":%lu,"
-                "\"hash_collisions\":%lu,"
-                "\"max_chain_length\":%lu,"
-                "\"memory_usage\":%lu,"
-                "\"realloc_count\":%lu,"
-                "\"total_writes\":%lu,"
-                "\"buffer_rate\":%.1f}\n",
-                current_time,
-                buffer_stats.buffer_writes,
-                buffer_stats.disk_fallback_full,
-                buffer_stats.disk_fallback_size,
-                buffer_stats.disk_fallback_oom,
-                buffer_stats.hash_collisions,
-                buffer_stats.max_chain_length,
-                buffer_stats.memory_usage,
-                buffer_stats.realloc_count,
-                total_writes,
-                (buffer_stats.buffer_writes * 100.0) / total_writes);
-            fclose(log_file);
-        }
-    }
-    */
+  // DISABLED: Buffer statistics logging to reduce I/O
+  /*
+  if (total_writes > 0) {
+      FILE *log_file = fopen("/home/piotr/buffer_stats.json", "a");
+      if (log_file) {
+          fprintf(log_file,
+              "{\"timestamp\":%ld,"
+              "\"buffer_writes\":%lu,"
+              "\"disk_fallback_full\":%lu,"
+              "\"disk_fallback_size\":%lu,"
+              "\"disk_fallback_oom\":%lu,"
+              "\"hash_collisions\":%lu,"
+              "\"max_chain_length\":%lu,"
+              "\"memory_usage\":%lu,"
+              "\"realloc_count\":%lu,"
+              "\"total_writes\":%lu,"
+              "\"buffer_rate\":%.1f}\n",
+              current_time,
+              buffer_stats.buffer_writes,
+              buffer_stats.disk_fallback_full,
+              buffer_stats.disk_fallback_size,
+              buffer_stats.disk_fallback_oom,
+              buffer_stats.hash_collisions,
+              buffer_stats.max_chain_length,
+              buffer_stats.memory_usage,
+              buffer_stats.realloc_count,
+              total_writes,
+              (buffer_stats.buffer_writes * 100.0) / total_writes);
+          fclose(log_file);
+      }
+  }
+  */
 }
 
 // Get buffer data for file_check functions to work on memory instead of disk
-const unsigned char* file_buffer_get_data(file_recovery_t *file_recovery, size_t *buffer_size)
+const unsigned char *file_buffer_get_data(file_recovery_t *file_recovery, size_t *buffer_size)
 {
-    if (!file_recovery || !buffer_size) {
-        return NULL;
-    }
-
-    init_buffer_hash_table();
-
-    int hash = hash_file_recovery(file_recovery);
-    int idx = hash_table[hash];
-
-    // Search collision chain
-    while (idx != -1) {
-        if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery) {
-            *buffer_size = file_buffers[idx].buffer_size;
-            return (const unsigned char*)file_buffers[idx].buffer;
-        }
-        idx = file_buffers[idx].next_index;
-    }
-
-    *buffer_size = 0;
+  if (!file_recovery || !buffer_size)
+  {
     return NULL;
+  }
+
+  init_buffer_hash_table();
+
+  int hash = hash_file_recovery(file_recovery);
+  int idx = hash_table[hash];
+
+  // Search collision chain
+  while (idx != -1)
+  {
+    if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery)
+    {
+      *buffer_size = file_buffers[idx].buffer_size;
+      return (const unsigned char *)file_buffers[idx].buffer;
+    }
+    idx = file_buffers[idx].next_index;
+  }
+
+  *buffer_size = 0;
+  return NULL;
 }
 
 // Returns 1 if file is in memory buffer (skip disk-based file_check)
 // Returns 0 if file should use normal disk-based file_check
 int read_file_data_from_buffer(file_recovery_t *file_recovery)
 {
-  if (!file_recovery) return 0;
+  if (!file_recovery)
+    return 0;
 
-  // If using memory buffering, check if we have data in buffer
-  if (file_recovery->use_memory_buffering) {
-    size_t buffer_size;
-    const unsigned char *buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
+  size_t buffer_size;
+  const unsigned char *buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
 
-    if (buffer_data && buffer_size > 0) {
-      // Store buffer data in file_recovery struct for file_check functions
-      file_recovery->memory_buffer = (unsigned char*)buffer_data;
-      file_recovery->buffer_size = buffer_size;
+  if (buffer_data && buffer_size > 0)
+  {
+    // Store buffer data in file_recovery struct for file_check functions
+    file_recovery->memory_buffer = (unsigned char *)buffer_data;
+    file_recovery->buffer_size = buffer_size;
 
-      // Return 1 to indicate file_check should skip (data is in memory)
-      return 1;
-    }
+    // Return 1 to indicate file_check should skip (data is in memory)
+    return 1;
   }
 
   // File not in buffer or traditional mode - use normal disk-based file_check
@@ -416,163 +504,264 @@ int read_file_data_from_buffer(file_recovery_t *file_recovery)
 // IMPROVED: Better error handling and memory leak prevention
 int file_buffer_clear(file_recovery_t *file_recovery)
 {
-    int hash;
-    int idx, prev_idx;
+  int hash;
+  int idx, prev_idx;
 
-    if (!file_recovery) return 0;
+  if (!file_recovery)
+    return 0;
 
-    init_buffer_hash_table();
-    hash = hash_file_recovery(file_recovery);
-    idx = hash_table[hash];
-    prev_idx = -1;
+  init_buffer_hash_table();
+  hash = hash_file_recovery(file_recovery);
+  idx = hash_table[hash];
+  prev_idx = -1;
 
-    // Search collision chain
-    while (idx != -1) {
-        if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery) {
-            // Update memory usage statistics before freeing
-            if (file_buffers[idx].buffer) {
-                // buffer_stats.memory_usage -= file_buffers[idx].buffer_capacity;
-                free(file_buffers[idx].buffer);
-                file_buffers[idx].buffer = NULL;
-            }
+  // Search collision chain
+  while (idx != -1)
+  {
+    if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery)
+    {
+      // Close read handle if open (this will call buffer_close and free cookie)
+      if (file_buffers[idx].read_handle)
+      {
+        fclose(file_buffers[idx].read_handle);
+        file_buffers[idx].read_handle = NULL;
+      }
 
-            // Remove from collision chain to prevent infinite loops
-            if (prev_idx == -1) {
-                // It's the head of the chain
-                hash_table[hash] = file_buffers[idx].next_index;
-            } else {
-                // It's in the middle/end of chain
-                file_buffers[prev_idx].next_index = file_buffers[idx].next_index;
-            }
+      // Close save handle if open
+      if (file_buffers[idx].save_handle)
+      {
+        fclose(file_buffers[idx].save_handle);
+        file_buffers[idx].save_handle = NULL;
+      }
 
-            // Mark as inactive
-            file_buffers[idx].is_active = 0;
-            file_buffers[idx].file_recovery_ptr = NULL;
-            file_buffers[idx].buffer_size = 0;
-            file_buffers[idx].buffer_capacity = 0;
-            file_buffers[idx].already_flushed = 0;
-            file_buffers[idx].next_index = -1;
+      // Update memory usage statistics before freeing
+      if (file_buffers[idx].buffer)
+      {
+        // buffer_stats.memory_usage -= file_buffers[idx].buffer_capacity;
+        free(file_buffers[idx].buffer);
+        file_buffers[idx].buffer = NULL;
+      }
 
-            return 0;
-        }
-        prev_idx = idx;
-        idx = file_buffers[idx].next_index;
+      // Remove from collision chain to prevent infinite loops
+      if (prev_idx == -1)
+      {
+        // It's the head of the chain
+        hash_table[hash] = file_buffers[idx].next_index;
+      }
+      else
+      {
+        // It's in the middle/end of chain
+        file_buffers[prev_idx].next_index = file_buffers[idx].next_index;
+      }
+
+      // Mark as inactive
+      file_buffers[idx].is_active = 0;
+      file_buffers[idx].file_recovery_ptr = NULL;
+      file_buffers[idx].buffer_size = 0;
+      file_buffers[idx].buffer_capacity = 0;
+      file_buffers[idx].already_flushed = 0;
+
+      // OPTIMIZATION: Add back to free list
+      file_buffers[idx].next_index = free_list_head;
+      free_list_head = idx;
+
+      return 0;
     }
-    return 0; // Buffer not found, already cleared
+    prev_idx = idx;
+    idx = file_buffers[idx].next_index;
+  }
+  return 0; // Buffer not found, already cleared
+}
+
+// Create file handle for buffer if needed
+static FILE* create_buffer_save_handle(int buffer_idx)
+{
+  if (buffer_idx < 0 || buffer_idx >= MAX_FILE_BUFFERS)
+  {
+    return NULL;
+  }
+
+  if (!file_buffers[buffer_idx].is_active)
+  {
+    return NULL;
+  }
+
+  // Return existing handle if already created
+  if (file_buffers[buffer_idx].save_handle)
+  {
+    return file_buffers[buffer_idx].save_handle;
+  }
+
+  // Create new file handle
+  file_buffers[buffer_idx].save_handle = fopen(file_buffers[buffer_idx].filename, "w+b");
+
+  if (!file_buffers[buffer_idx].save_handle)
+  {
+    log_critical("Cannot create file %s for buffer: %s\n",
+                 file_buffers[buffer_idx].filename, strerror(errno));
+  }
+
+  return file_buffers[buffer_idx].save_handle;
 }
 
 // IMPROVED: Better error handling and memory leak prevention
 int file_buffer_flush(file_recovery_t *file_recovery)
 {
-    int hash;
-    int idx, prev_idx;
+  int hash;
+  int idx, prev_idx;
 
-    if (!file_recovery) return 0;
+  if (!file_recovery)
+    return 0;
 
-    init_buffer_hash_table();
-    hash = hash_file_recovery(file_recovery);
-    idx = hash_table[hash];
-    prev_idx = -1;
+  init_buffer_hash_table();
+  hash = hash_file_recovery(file_recovery);
+  idx = hash_table[hash];
+  prev_idx = -1;
 
-    // Search collision chain
-    while (idx != -1) {
-        if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery) {
-            // Create file handle if needed and write buffer to disk
-            if (file_buffers[idx].buffer_size > 0 && !file_buffers[idx].already_flushed) {
-                // Create file handle if it doesn't exist
-                if (!file_recovery->handle) {
-                    file_recovery->handle = fopen(file_recovery->filename, "w+b");
-                    if (!file_recovery->handle) {
-                        log_critical("Cannot create file %s during flush: %s\n",
-                                   file_recovery->filename, strerror(errno));
-                        // IMPROVED: Clean up memory even on error
-                        if (file_buffers[idx].buffer) {
-                            // buffer_stats.memory_usage -= file_buffers[idx].buffer_capacity;
-                            free(file_buffers[idx].buffer);
-                            file_buffers[idx].buffer = NULL;
-                        }
-                        file_buffers[idx].is_active = 0;
-                        return -1;
-                    }
-                }
+  // Search collision chain
+  while (idx != -1)
+  {
+    if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery)
+    {
+      // NOTE: Filesize filtering is done in file_finish_bf/file_finish2 BEFORE flush
+      // This function just writes the buffer to disk
 
-                if (fwrite(file_buffers[idx].buffer, 1, file_buffers[idx].buffer_size,
-                          file_recovery->handle) != file_buffers[idx].buffer_size) {
-                    // IMPROVED: Clean up memory even on write error
-                    if (file_buffers[idx].buffer) {
-                        // buffer_stats.memory_usage -= file_buffers[idx].buffer_capacity;
-                        free(file_buffers[idx].buffer);
-                        file_buffers[idx].buffer = NULL;
-                    }
-                    file_buffers[idx].is_active = 0;
-                    return -1;
-                }
-            }
-
-            // Free memory and update statistics
-            if (file_buffers[idx].buffer) {
-                // buffer_stats.memory_usage -= file_buffers[idx].buffer_capacity;
-                free(file_buffers[idx].buffer);
-                file_buffers[idx].buffer = NULL;
-            }
-
-            // Remove from collision chain to prevent infinite loops
-            if (prev_idx == -1) {
-                // It's the head of the chain
-                hash_table[hash] = file_buffers[idx].next_index;
-            } else {
-                // It's in the middle/end of chain
-                file_buffers[prev_idx].next_index = file_buffers[idx].next_index;
-            }
-
-            // Mark as inactive
-            file_buffers[idx].is_active = 0;
-            file_buffers[idx].file_recovery_ptr = NULL;
-            file_buffers[idx].buffer_size = 0;
-            file_buffers[idx].buffer_capacity = 0;
-            file_buffers[idx].already_flushed = 0;
-            file_buffers[idx].next_index = -1;
-
-            return 0;
+      // Create file handle if needed and write buffer to disk
+      if (file_buffers[idx].buffer_size > 0 && !file_buffers[idx].already_flushed)
+      {
+        // Create file handle using helper function
+        FILE *handle = create_buffer_save_handle(idx);
+        if (!handle)
+        {
+          // IMPROVED: Clean up memory even on error
+          if (file_buffers[idx].buffer)
+          {
+            // buffer_stats.memory_usage -= file_buffers[idx].buffer_capacity;
+            free(file_buffers[idx].buffer);
+            file_buffers[idx].buffer = NULL;
+          }
+          file_buffers[idx].is_active = 0;
+          return -1;
         }
-        prev_idx = idx;
-        idx = file_buffers[idx].next_index;
+
+        if (fwrite(file_buffers[idx].buffer, 1, file_buffers[idx].buffer_size,
+                   handle) != file_buffers[idx].buffer_size)
+        {
+          // IMPROVED: Clean up memory even on write error
+          if (file_buffers[idx].buffer)
+          {
+            // buffer_stats.memory_usage -= file_buffers[idx].buffer_capacity;
+            free(file_buffers[idx].buffer);
+            file_buffers[idx].buffer = NULL;
+          }
+          if (file_buffers[idx].save_handle)
+          {
+            fclose(file_buffers[idx].save_handle);
+            file_buffers[idx].save_handle = NULL;
+          }
+          file_buffers[idx].is_active = 0;
+          return -1;
+        }
+
+        // Close save_handle after successful write
+        if (file_buffers[idx].save_handle)
+        {
+          fclose(file_buffers[idx].save_handle);
+          file_buffers[idx].save_handle = NULL;
+        }
+
+        // Copy handle to file_recovery for compatibility (open for reading)
+        if (file_recovery->handle == NULL)
+        {
+          file_recovery->handle = fopen(file_buffers[idx].filename, "r+b");
+        }
+      }
+
+      // Free memory and update statistics
+      if (file_buffers[idx].buffer)
+      {
+        // buffer_stats.memory_usage -= file_buffers[idx].buffer_capacity;
+        free(file_buffers[idx].buffer);
+        file_buffers[idx].buffer = NULL;
+      }
+
+      // Remove from collision chain to prevent infinite loops
+      if (prev_idx == -1)
+      {
+        // It's the head of the chain
+        hash_table[hash] = file_buffers[idx].next_index;
+      }
+      else
+      {
+        // It's in the middle/end of chain
+        file_buffers[prev_idx].next_index = file_buffers[idx].next_index;
+      }
+
+      // Mark as inactive
+      file_buffers[idx].is_active = 0;
+      file_buffers[idx].file_recovery_ptr = NULL;
+      file_buffers[idx].buffer_size = 0;
+      file_buffers[idx].buffer_capacity = 0;
+      file_buffers[idx].already_flushed = 0;
+
+      // OPTIMIZATION: Add back to free list
+      file_buffers[idx].next_index = free_list_head;
+      free_list_head = idx;
+
+      return 0;
     }
-    return 0; // Buffer not found
+    prev_idx = idx;
+    idx = file_buffers[idx].next_index;
+  }
+  return 0; // Buffer not found
 }
 
 // Flush all active buffers - called at program exit
 void flush_all_buffers(void)
 {
-    int flushed_count = 0;
-    int error_count = 0;
+  int flushed_count = 0;
+  int error_count = 0;
 
-    for (int i = 0; i < MAX_FILE_BUFFERS; i++) {
-        if (file_buffers[i].is_active && !file_buffers[i].already_flushed) {
-            if (file_buffer_flush(file_buffers[i].file_recovery_ptr) == 0) {
-                flushed_count++;
-            } else {
-                error_count++;
-            }
-        }
+  for (int i = 0; i < MAX_FILE_BUFFERS; i++)
+  {
+    if (file_buffers[i].is_active && !file_buffers[i].already_flushed)
+    {
+      if (file_buffer_flush(file_buffers[i].file_recovery_ptr) == 0)
+      {
+        flushed_count++;
+      }
+      else
+      {
+        error_count++;
+      }
     }
+  }
 
-    if (flushed_count > 0) {
-        // log_info("Final flush: %d buffers flushed successfully", flushed_count);
-        if (error_count > 0) {
-            log_warning("Final flush: %d buffers had errors", error_count);
-        }
+  if (flushed_count > 0)
+  {
+    // log_info("Final flush: %d buffers flushed successfully", flushed_count);
+    if (error_count > 0)
+    {
+      log_warning("Final flush: %d buffers had errors", error_count);
     }
+  }
 }
 
 // Set global file size filter for all recovery operations
 void set_global_file_size_filter(const file_size_filter_t *filter)
 {
-  if (filter != NULL) {
+  if (filter != NULL)
+  {
     global_file_size_filter = *filter; // Copy values, not pointer!
-  } else {
+    log_info("FILTER: Global filesize filter set: min=%llu, max=%llu\n",
+             (unsigned long long)filter->min_file_size,
+             (unsigned long long)filter->max_file_size);
+  }
+  else
+  {
     global_file_size_filter.min_file_size = 0;
     global_file_size_filter.max_file_size = 0;
+    log_info("FILTER: Global filesize filter cleared\n");
   }
 }
 
@@ -588,47 +777,35 @@ uint64_t get_user_min_filesize(void)
   return global_file_size_filter.min_file_size;
 }
 
-// Memory-aware file handle creation
-// For memory buffering: creates FILE* stream from memory buffer (read-only)
-// For traditional mode: creates regular file handle (write mode)
-FILE* file_recovery_create_handle(file_recovery_t *file_recovery, const char *mode)
+// Get read handle from buffer - returns fopencookie handle for reading buffer data
+// This handle automatically tracks buffer_size for EOF
+FILE *get_buffer_read_handle(file_recovery_t *file_recovery)
 {
-    if (!file_recovery) {
-        return NULL;
+  if (!file_recovery)
+  {
+    return NULL;
+  }
+
+  init_buffer_hash_table();
+
+  int hash = hash_file_recovery(file_recovery);
+  int idx = hash_table[hash];
+
+  // Search collision chain
+  while (idx != -1)
+  {
+    if (file_buffers[idx].is_active && file_buffers[idx].file_recovery_ptr == file_recovery)
+    {
+      if (file_buffers[idx].read_handle)
+      {
+        // Reset position to beginning for fresh read
+        fseek(file_buffers[idx].read_handle, 0, SEEK_SET);
+        return file_buffers[idx].read_handle;
+      }
+      return NULL;
     }
+    idx = file_buffers[idx].next_index;
+  }
 
-    // If memory buffering is enabled and we're in read mode, use memory buffer
-    if (file_recovery->use_memory_buffering &&
-        (strchr(mode, 'r') != NULL || strchr(mode, '+') != NULL)) {
-
-        // Get data from memory buffer
-        size_t buffer_size = 0;
-        const unsigned char *buffer_data = file_buffer_get_data(file_recovery, &buffer_size);
-
-        if (buffer_data && buffer_size > 0) {
-            // Create FILE* stream from memory buffer using fmemopen()
-            // Use "rb" mode for binary reading from memory
-            FILE *mem_stream = fmemopen((void*)buffer_data, buffer_size, "rb");
-            if (mem_stream) {
-                return mem_stream;
-            }
-            // If fmemopen fails, fall back to traditional file method
-        }
-
-        // If no buffer data yet, fall back to traditional file method
-        // This handles the case where file_check functions are called before
-        // the file is fully recovered and flushed to disk
-    }
-
-    // Traditional mode: create regular file handle
-    // First ensure file exists on disk (may need to flush buffer)
-    if (file_recovery->use_memory_buffering && !file_recovery->handle) {
-        // Need to flush buffer to disk first to create the file
-        if (file_buffer_flush(file_recovery) != 0) {
-            return NULL;
-        }
-    }
-
-    // Create regular file handle
-    return fopen(file_recovery->filename, mode);
+  return NULL;
 }

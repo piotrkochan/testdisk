@@ -187,11 +187,8 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
       }
       else
       {
-	// FIXED: Support both memory buffering and traditional file handle
-	if(file_recovery.use_memory_buffering || file_recovery.handle!=NULL)
-	{
-	  if(file_buffer_write(&file_recovery, buffer, blocksize)<0)
-	  { 
+  if(file_buffer_write(&file_recovery, buffer, blocksize)<0)
+  { 
 #ifndef DISABLED_FOR_FRAMAC
 	    log_critical("Cannot write to file %s after %llu bytes: %s\n", file_recovery.filename, (long long unsigned)file_recovery.file_size, strerror(errno));
 #endif
@@ -206,8 +203,7 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
 	      ind_stop=PSTATUS_ENOSPC;
 	      params->offset=file_recovery.location.start;
 	    }
-	  }
-	}
+  }
 	if(ind_stop==PSTATUS_OK)
 	{
 	  /*@ assert valid_file_recovery(&file_recovery); */

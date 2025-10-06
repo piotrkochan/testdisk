@@ -52,6 +52,7 @@
 #endif
 #include <ctype.h>      /* isprint */
 #include "filegen.h"
+#include "image_filter.h"
 #include "common.h"
 #include "log.h"
 #include "file_jpg.h"
@@ -90,6 +91,7 @@ const file_hint_t file_hint_jpg= {
   .max_filesize=50*1024*1024,
   .recover=1,
   .enable_by_default=1,
+  .filesize_selfvalidation=1,
   .register_header_check=&register_header_check_jpg
 };
 
@@ -865,14 +867,55 @@ static time_t jpg_get_date(const unsigned char *buffer, const unsigned int buffe
 
 static void jpg_maches_image_filtering(file_recovery_t *file_recovery);
 
+// Check if JPEG in buffer should be skipped based on dimensions AND filesize
+// Returns 1 if should skip, 0 if should keep
+static int jpg_should_skip_by_buffer(const unsigned char *buffer, unsigned int buffer_size)
+{
+  unsigned int i;
+
+  // Check filesize filter first
+  {
+    uint64_t user_min = get_user_min_filesize();
+    uint64_t user_max = get_user_max_filesize();
+
+    if(user_min > 0 && buffer_size < user_min) {
+      return 1;  // Skip: file too small
+    }
+    if(user_max > 0 && buffer_size > user_max) {
+      return 1;  // Skip: file too large
+    }
+  }
+
+  if(!has_any_image_size_filter())
+    return 0;
+
+  if(buffer_size <= 10)
+    return 0;
+
+  // Look for SOF (Start of Frame) marker 0xFFC0
+  for(i = 0; i < buffer_size - 10; i++)
+  {
+    if(buffer[i] == 0xff && buffer[i+1] == 0xc0)
+    {
+      if(i + 10 < buffer_size)
+      {
+        // Extract width/height from JPEG SOF marker
+        const unsigned int width = (buffer[i+7] << 8) | buffer[i+8];
+        const unsigned int height = (buffer[i+5] << 8) | buffer[i+6];
+
+        return should_skip_image_by_dimensions(width, height);
+      }
+      break;
+    }
+  }
+  return 0;
+}
+
 static void jpg_maches_image_filtering(file_recovery_t *file_recovery)
 {
   unsigned char buffer[1024];
   unsigned int buffer_size;
   unsigned int i;
-
-  if(!file_recovery->handle)
-    return;
 
   // Read JPEG header from file handle (memory or disk)
   if(my_fseek(file_recovery->handle, 0, SEEK_SET) < 0)
@@ -885,26 +928,11 @@ static void jpg_maches_image_filtering(file_recovery_t *file_recovery)
   if(!(buffer[0] == 0xff && buffer[1] == 0xd8 && buffer[2] == 0xff))
     return;
 
-  // Check dimensions in the buffer we're examining
-  if(buffer_size > 10)
+  // Check if main image should be filtered by dimensions
+  if(jpg_should_skip_by_buffer(buffer, buffer_size))
   {
-    for(i = 0; i < buffer_size - 10; i++)
-    {
-      if(buffer[i] == 0xff && buffer[i+1] == 0xc0)
-      {
-        if(i + 10 < buffer_size)
-        {
-          // Just extract width/height directly from buffer since struct isn't defined yet
-          const unsigned int width = (buffer[i+7] << 8) | buffer[i+8];
-          const unsigned int height = (buffer[i+5] << 8) | buffer[i+6];
-          // FIXED: Save dimensions for filtering in file_finish_aux
-          file_recovery->image_data.width = width;
-          file_recovery->image_data.height = height;
-          // log_trace("DEBUG JPG: set dimensions %ux%u for %s\n", width, height, file_recovery->filename);
-        }
-        break;
-      }
-    }
+    file_recovery->file_size = 0;
+    return;
   }
 }
 
@@ -2347,7 +2375,11 @@ static int jpg_check_app1(file_recovery_t *file_recovery, const unsigned int ext
   /*@ assert thumb_offset + thumb_size <= nbytes; */
   /*@ assert 0 < thumb_size; */
   /*@ assert thumb_offset < nbytes; */
-  jpg_save_thumbnail(file_recovery, (const char *)buffer, nbytes, thumb_offset, thumb_size);
+
+  // Check if thumbnail should be filtered by dimensions before saving
+  if(!jpg_should_skip_by_buffer((const unsigned char *)buffer + thumb_offset, thumb_size)) {
+    jpg_save_thumbnail(file_recovery, (const char *)buffer, nbytes, thumb_offset, thumb_size);
+  }
   return 1;
 }
 

@@ -38,6 +38,7 @@
 #include "types.h"
 #include "common.h"
 #include "filegen.h"
+#include "image_filter.h"
 #include "log.h"
 
 extern const file_hint_t file_hint_doc;
@@ -319,9 +320,6 @@ static void png_maches_image_filtering(file_recovery_t *file_recovery)
   unsigned char buffer[1024];
   unsigned int buffer_size;
 
-  if(!file_recovery->handle)
-    return;
-
   // Read PNG header from file handle (memory or disk)
   if(my_fseek(file_recovery->handle, 0, SEEK_SET) < 0)
     return;
@@ -338,13 +336,17 @@ static void png_maches_image_filtering(file_recovery_t *file_recovery)
     const struct png_ihdr *ihdr = (const struct png_ihdr *)&buffer[16];
     const unsigned int width = be32(ihdr->width);
     const unsigned int height = be32(ihdr->height);
-    // FIXED: Save dimensions for filtering in file_finish_aux
-    file_recovery->image_data.width = width;
-    file_recovery->image_data.height = height;
-    // log_trace("DEBUG PNG: set dimensions %ux%u for %s\n", width, height, file_recovery->filename);
-  }
-  else {
-    log_trace("DEBUG PNG: buffer too small (%u < %zu) for %s\n", buffer_size, 16 + sizeof(struct png_ihdr), file_recovery->filename);
+
+    // Check if image should be filtered by dimensions
+    if(has_any_image_size_filter())
+    {
+      if(should_skip_image_by_dimensions(width, height))
+      {
+        // Reject the file by setting size to 0
+        file_recovery->file_size = 0;
+        return;
+      }
+    }
   }
 }
 

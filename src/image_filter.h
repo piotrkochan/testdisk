@@ -42,20 +42,24 @@ struct image_size_filter_struct
 
 typedef struct image_size_filter_struct image_size_filter_t;
 
-int has_any_image_size_filter(const image_size_filter_t *filter);
-int should_skip_image_by_dimensions(const image_size_filter_t *filter, uint32_t width, uint32_t height);
+int has_any_image_size_filter(void);
+int should_skip_image_by_dimensions(uint32_t width, uint32_t height);
 
-void change_imagesize_cli(char **cmd, image_size_filter_t *filter);
+void change_imagesize_cli(char **cmd);
 
-int validate_image_filter(const image_size_filter_t *filter);
+int validate_image_filter(void);
 
 uint64_t parse_pixels_value(char **cmd);
 
-void print_image_filter(const image_size_filter_t *filter);
+void print_image_filter(void);
 
 void parse_pixels_range(char **cmd, uint64_t *min_pixels, uint64_t *max_pixels);
 
-void image_size_2_cli(const image_size_filter_t *filter, char *buffer, size_t buffer_size);
+void image_size_2_cli(char *buffer, size_t buffer_size);
+
+// Global image filter functions
+void set_global_image_filter(const image_size_filter_t *filter);
+const image_size_filter_t* get_global_image_filter(void);
 
 #ifdef __cplusplus
 }

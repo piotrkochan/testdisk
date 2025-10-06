@@ -37,13 +37,15 @@ int read_file_data_from_buffer(file_recovery_t *file_recovery);
 void flush_all_buffers(void);
 void print_buffer_statistics(void);
 
-// Memory-aware file handle creation
+// Get read handle from memory buffer (fopencookie handle)
+FILE* get_buffer_read_handle(file_recovery_t *file_recovery);
+
 FILE* file_recovery_create_handle(file_recovery_t *file_recovery, const char *mode);
 
 // Global file size filter functions
 void set_global_file_size_filter(const file_size_filter_t *filter);
-uint64_t get_user_min_filesize(void);
-uint64_t get_user_max_filesize(void);
+inline uint64_t get_user_min_filesize(void);
+inline uint64_t get_user_max_filesize(void);
 
 #ifdef __cplusplus
 } /* closing brace for extern "C" */

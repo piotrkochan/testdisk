@@ -289,10 +289,12 @@ int session_save(const alloc_data_t *list_free_space, const struct ph_param *par
       }
     }
     /* Save image filter settings */
-    if(has_any_image_size_filter(&options->image_filter))
+    // Set the global filter temporarily to save settings
+    set_global_image_filter(&options->image_filter);
+    if(has_any_image_size_filter())
     {
       char filter_buffer[512];
-      image_size_2_cli(&options->image_filter, filter_buffer, sizeof(filter_buffer));
+      image_size_2_cli(filter_buffer, sizeof(filter_buffer));
       fprintf(f_session, "%s", filter_buffer);
     }
     /* Save options */

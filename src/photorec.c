@@ -64,6 +64,7 @@
 #include "fnctdsk.h"
 #include "dir.h"
 #include "filegen.h"
+#include "image_filter.h"
 #include "photorec.h"
 #include "exfatp.h"
 #include "ext2p.h"
@@ -678,16 +679,10 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
 
       // Create handle for file_check - memory-aware (reads from buffer or file)
       if(!file_recovery->handle) {
-        file_recovery->handle = file_recovery_create_handle(file_recovery, "rb");
+        file_recovery->handle = get_buffer_read_handle(file_recovery);
       }
 
       file_recovery->file_check(file_recovery);
-
-      // Close handle after file_check to prevent resource leaks
-      if(file_recovery->handle) {
-        fclose(file_recovery->handle);
-        file_recovery->handle = NULL;
-      }
     }
   /* FIXME: need to adapt read_size to volume size to avoid this */
   if(file_recovery->file_size > params->disk->disk_size)
@@ -705,62 +700,8 @@ static pfstatus_t file_finish_aux(file_recovery_t *file_recovery, struct ph_para
 #endif
     file_recovery->file_size=0;
   }
-  // FIXED: Unified filtering logic for all files
-  {
-    uint64_t user_min = get_user_min_filesize();
-    uint64_t user_max = get_user_max_filesize();
-
-    // AAAAAAAA Always show debug for testing
-    // log_trace("Filter check: file=%s, size=%llu, width=%u, height=%u\n",
-    //        file_recovery->filename,
-    //        (unsigned long long)file_recovery->file_size,
-    //        file_recovery->image_data.width,
-    //        file_recovery->image_data.height);
-
-    // Check file size filter
-    if(user_min > 0 && file_recovery->file_size < user_min) {
-        file_recovery->file_size=0;
-    }
-    else if(user_max > 0 && file_recovery->file_size > user_max) {
-        file_recovery->file_size=0;
-    }
-    // Check image dimensions filter if this is an image
-    else if(params->image_filter && has_any_image_size_filter(params->image_filter) &&
-            file_recovery->file_stat->file_hint->is_image &&
-            should_skip_image_by_dimensions(params->image_filter, file_recovery->image_data.width, file_recovery->image_data.height)) {
-        file_recovery->file_size=0;
-    }
-  }
-
-  // FIXED: No file creation during memory buffering - files stay in RAM until flush
-  // REMOVED: All premature file handle creation and flushing
-
-  if(file_recovery->file_size==0)
-  {
-    if(paranoid==2)
-      return PFSTATUS_BAD;
-    file_buffer_clear(file_recovery);  // Clear buffer for rejected file
-    if(file_recovery->handle) {
-      fclose(file_recovery->handle);
-      file_recovery->handle=NULL;
-    }
-    /* File is zero-length; erase it */
-    /*@ assert valid_read_string((const char *)file_recovery->filename); */
-    unlink(file_recovery->filename);
-    return PFSTATUS_BAD;
-  }
-#if defined(HAVE_FTRUNCATE)
-  if(file_recovery->handle) {
-    fflush(file_recovery->handle);
-    if(ftruncate(fileno(file_recovery->handle), file_recovery->file_size)<0)
-    {
-      log_critical("ftruncate failed.\n");
-    }
-  }
-#endif
-  // FIXED: Flush individual files to disk so they're visible during recovery
-  if(file_recovery->use_memory_buffering) {
-    file_buffer_flush(file_recovery);
+  if(file_buffer_flush(file_recovery) != 0) {
+    file_recovery->file_size = 0;  // Mark file as rejected
   }
   if(file_recovery->handle) {
     fclose(file_recovery->handle);
@@ -807,20 +748,43 @@ int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
   if(file_recovery->file_stat==NULL)
     return 0;
 
-  // FIXED: Call file_check_presave like file_finish2
-  if(file_recovery->file_check_presave) {
-    // Create handle for file_check_presave - memory-aware (reads from buffer or file)
-    if(!file_recovery->handle) {
-      file_recovery->handle = file_recovery_create_handle(file_recovery, "rb");
+  // FIRST: Check filesize filters before any expensive operations (like file_finish2)
+  {
+    uint64_t user_min = get_user_min_filesize();
+    uint64_t user_max = get_user_max_filesize();
+
+    // Check file size filter
+    if(user_min > 0 && file_recovery->file_size < user_min) {
+        file_recovery->file_size=0;
     }
+    else if(user_max > 0 && file_recovery->file_size > user_max) {
+        file_recovery->file_size=0;
+    }
+  }
+
+  if(file_recovery->file_size > 0 && file_recovery->file_check_presave)
+  {
+    // Create handle for file_check_presave - memory-aware (reads from buffer or file)
+    // if(!file_recovery->handle) {
+    //   file_recovery->handle = get_buffer_read_handle(file_recovery);
+    // }
 
     if(file_recovery->handle) {
       file_recovery->file_check_presave(file_recovery);
-
-      // Close handle after file_check_presave to prevent resource leaks
-      fclose(file_recovery->handle);
-      file_recovery->handle = NULL;
     }
+  }
+
+  // Early exit if file was rejected by filesize filters
+  if(file_recovery->file_size==0)
+  {
+    file_buffer_clear(file_recovery);  // Clear buffer for rejected file
+    if(file_recovery->handle) {
+      fclose(file_recovery->handle);
+      file_recovery->handle=NULL;
+    }
+    file_block_truncate_zero(file_recovery, list_search_space);
+    reset_file_recovery(file_recovery);
+    return 0;
   }
 
   // FIXED: Use unified file_finish_aux (no double flushing)
@@ -871,22 +835,41 @@ pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params,
   if(file_recovery->file_stat==NULL)
     return PFSTATUS_BAD;
 
-  // FIXED: Call file_check_presave to populate image_data before filtering
-  if(file_recovery->file_check_presave) {
-    // Create handle for file_check_presave - memory-aware (reads from buffer or file)
-    if(!file_recovery->handle) {
-      file_recovery->handle = file_recovery_create_handle(file_recovery, "rb");
-    }
+  // FIRST: Check filesize filters before any expensive operations
+  {
+    uint64_t user_min = get_user_min_filesize();
+    uint64_t user_max = get_user_max_filesize();
 
+    // Check file size filter
+    if(user_min > 0 && file_recovery->file_size < user_min) {
+        file_recovery->file_size=0;
+    }
+    else if(user_max > 0 && file_recovery->file_size > user_max) {
+        file_recovery->file_size=0;
+    }
+  }
+
+  // Early exit if file was rejected by filesize filters - don't waste time on presave/filecheck
+  if(file_recovery->file_size==0)
+  {
+    if(paranoid==2)
+      return PFSTATUS_BAD;
+    file_buffer_clear(file_recovery);  // Clear buffer for rejected file
     if(file_recovery->handle) {
-      file_recovery->file_check_presave(file_recovery);
-      // AAAAAAAA log_trace("DEBUG after presave: width=%u, height=%u\n",
-      //          file_recovery->image_data.width, file_recovery->image_data.height);
-
-      // Close handle after file_check_presave to prevent resource leaks
       fclose(file_recovery->handle);
-      file_recovery->handle = NULL;
+      file_recovery->handle=NULL;
     }
+    /* File is zero-length; erase it */
+    unlink(file_recovery->filename);
+    return PFSTATUS_BAD;
+  }
+
+  // Call file_check_presave for format-specific filtering (e.g., image dimensions)
+  if(file_recovery->file_check_presave) {
+    if(!file_recovery->handle) {
+      file_recovery->handle = get_buffer_read_handle(file_recovery);
+    }
+    file_recovery->file_check_presave(file_recovery);
   }
 
   // Call enhanced file_finish_aux that handles filtering and buffer flushing
@@ -1079,6 +1062,8 @@ void params_reset(struct ph_param *params, const struct ph_options *options)
   /*@ assert valid_ph_param(params); */
   params->file_stats=init_file_stats(options->list_file_format);
   params->image_filter=&options->image_filter;
+  // Set global image filter for format-specific filtering functions
+  set_global_image_filter(&options->image_filter);
   /*@ assert valid_ph_param(params); */
   params_reset_aux(params);
 }

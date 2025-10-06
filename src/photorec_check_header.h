@@ -151,7 +151,7 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
   //  }
   //}
 
-  if(file_recovery->file_stat->file_hint->recover==1)
+  /* if(file_recovery->file_stat->file_hint->recover==1)
   {
     // FIXED: Only create file handle when memory buffering is disabled
     if(!file_recovery->use_memory_buffering) {
@@ -169,7 +169,7 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
         return PSTATUS_EACCES;
       }
     }
-  }
+  } */
   return PSTATUS_OK;
 }
 

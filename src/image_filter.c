@@ -38,13 +38,12 @@
 #include "image_filter.h"
 #include "log.h"
 
+// Global image filter for all recovery operations
+static image_size_filter_t global_image_filter = {0, 0, 0, 0, 0, 0};
 
-void print_image_filter(const image_size_filter_t *filter)
+void print_image_filter(void)
 {
-  if(!filter) {
-    printf("Image filter: NULL (no filtering)\n");
-    return;
-  }
+  const image_size_filter_t *filter = &global_image_filter;
 
   printf("=== Image Filter Settings ===\n");
 
@@ -120,9 +119,35 @@ void print_image_filter(const image_size_filter_t *filter)
   printf("=============================\n");
 }
 
-int should_skip_image_by_dimensions(const image_size_filter_t *filter, uint32_t width, uint32_t height)
+// Set global image filter for all recovery operations
+void set_global_image_filter(const image_size_filter_t *filter)
 {
-  if(!filter)
+  if (filter != NULL) {
+    global_image_filter = *filter; // Copy values, not pointer!
+  } else {
+    memset(&global_image_filter, 0, sizeof(global_image_filter));
+  }
+}
+
+// Get global image filter
+const image_size_filter_t* get_global_image_filter(void)
+{
+  return &global_image_filter;
+}
+
+int has_any_image_size_filter(void)
+{
+  const image_size_filter_t *filter = &global_image_filter;
+  return (filter->min_width > 0 || filter->max_width > 0 ||
+          filter->min_height > 0 || filter->max_height > 0 ||
+          filter->min_pixels > 0 || filter->max_pixels > 0);
+}
+
+int should_skip_image_by_dimensions(uint32_t width, uint32_t height)
+{
+  const image_size_filter_t *filter = &global_image_filter;
+
+  if(!has_any_image_size_filter())
     return 0;
 
   if(filter->min_pixels > 0 || filter->max_pixels > 0)
@@ -146,13 +171,6 @@ int should_skip_image_by_dimensions(const image_size_filter_t *filter, uint32_t 
     return 1;
 
   return 0;
-}
-
-int has_any_image_size_filter(const image_size_filter_t *filter)
-{
-  return (filter->min_width | filter->max_width |
-          filter->min_height | filter->max_height |
-          filter->min_pixels | filter->max_pixels) > 0;
 }
 
 /* Parse pixel value in numeric or WIDTHxHEIGHT format. Valid formats:
@@ -248,8 +266,9 @@ void parse_pixels_range(char **cmd, uint64_t *min_pixels, uint64_t *max_pixels)
   *cmd = ptr;
 }
 
-int validate_image_filter(const image_size_filter_t *filter)
+int validate_image_filter(void)
 {
+  const image_size_filter_t *filter = &global_image_filter;
   /* Check for conflicting parameters: pixels vs width/height */
   int has_pixels = (filter->min_pixels > 0 || filter->max_pixels > 0);
   int has_dimensions = (filter->min_width > 0 || filter->max_width > 0 ||
@@ -267,8 +286,9 @@ int validate_image_filter(const image_size_filter_t *filter)
   return 1;
 }
 
-void change_imagesize_cli(char **cmd, image_size_filter_t *filter)
+void change_imagesize_cli(char **cmd)
 {
+  image_size_filter_t *filter = &global_image_filter;
   char *ptr = *cmd;
   memset(filter, 0, sizeof(*filter));
 
@@ -331,15 +351,16 @@ void change_imagesize_cli(char **cmd, image_size_filter_t *filter)
   *cmd = ptr;
 
   /* Validate configuration */
-  validate_image_filter(filter);
+  validate_image_filter();
 }
 
 /* Convert image_size_filter_t to CLI format string for session saving */
-void image_size_2_cli(const image_size_filter_t *filter, char *buffer, size_t buffer_size)
+void image_size_2_cli(char *buffer, size_t buffer_size)
 {
+  const image_size_filter_t *filter = &global_image_filter;
   int written = 0;
 
-  if (!has_any_image_size_filter(filter)) {
+  if (!has_any_image_size_filter()) {
     buffer[0] = '\0';
     return;
   }

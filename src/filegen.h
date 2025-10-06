@@ -58,8 +58,8 @@ struct file_hint_struct
   const char *description;
   const uint64_t max_filesize;
   const int recover;
-  const unsigned int is_image;
   const unsigned int enable_by_default;
+  const unsigned int filesize_selfvalidation;
   void (*register_header_check)(file_stat_t *file_stat);
 };
 
@@ -85,20 +85,11 @@ struct file_stat_struct
   const file_hint_t *file_hint;
 };
 
-struct image_data_struct
-{
-  uint32_t width;
-  uint32_t height;
-};
-
-typedef struct image_data_struct image_data_t;
-
 struct file_recovery_struct
 {
   char filename[2048];
   alloc_list_t location;
   file_stat_t *file_stat;
-  image_data_t image_data;  // FIXED: Activated for image filtering
   FILE *handle;
   time_t time;
   uint64_t file_size;
@@ -113,7 +104,6 @@ struct file_recovery_struct
   void (*file_check)(file_recovery_t *file_recovery);
   void (*file_rename)(file_recovery_t *file_recovery);
   void (*file_check_presave)(file_recovery_t *file_recovery);
-  //const image_size_filter_t *image_filter;
   uint64_t checkpoint_offset;
   int checkpoint_status;	/* 0=suspend at offset_checkpoint if offset_checkpoint>0, 1=resume at offset_checkpoint */
   unsigned int blocksize;
@@ -122,7 +112,6 @@ struct file_recovery_struct
   unsigned char *memory_buffer;        // FIXED: Activated memory buffer fields
   uint64_t buffer_size;
   uint64_t buffer_max_size;
-  int use_memory_buffering;            // FIXED: Flag to enable memory buffering
 };
 
 typedef struct

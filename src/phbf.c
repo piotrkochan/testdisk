@@ -222,21 +222,11 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	    need_to_check_file=1;	/* No header found => no file => stop */
 	}
 	if(file_recovery.file_stat!=NULL && file_recovery.handle==NULL)
-	{ /* Create new file */
+	{
 	  set_filename(&file_recovery, params);
-	  // FIXED: Only create file handle when memory buffering is disabled
-	  if(file_recovery.file_stat->file_hint->recover==1 && !file_recovery.use_memory_buffering)
-	  {
-	    if(!(file_recovery.handle=fopen(file_recovery.filename,"w+b")))
-	    {
-	      log_critical("Cannot create file %s: %s\n", file_recovery.filename, strerror(errno));
-	      ind_stop=PSTATUS_EACCES;
-	    }
-	  }
 	}
 	// FIXED: Continue processing with either file handle OR memory buffering
-	if(need_to_check_file==0 && file_recovery.file_stat!=NULL &&
-	   (file_recovery.handle!=NULL || file_recovery.use_memory_buffering))
+	if(need_to_check_file==0 && file_recovery.file_stat!=NULL && file_recovery.handle!=NULL)
 	{
 	  /* Check file_size_filter before writing more data */
 	  /*if(options->file_size_filter.max_file_size > 0 && file_recovery.file_size + blocksize > options->file_size_filter.max_file_size)
@@ -254,17 +244,32 @@ pstatus_t photorec_bf(struct ph_param *params, const struct ph_options *options,
 	      file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
 
 	      // FIXED: Write to buffer (memory buffering) or file handle (traditional)
-	      if(file_recovery.use_memory_buffering || file_recovery.handle!=NULL) {
+	      if(file_recovery.handle!=NULL) {
 	        if(file_buffer_write(&file_recovery, buffer, blocksize)<0)
 	        {
-	          log_critical("Cannot write to file %s: %s\n", file_recovery.filename, strerror(errno));
-	          ind_stop=PSTATUS_ENOSPC;
+	          // Buffer overflow - file too large, reject it and stop recovery
+	          file_buffer_clear(&file_recovery);
+	          file_recovery.file_size = 0;
+	          need_to_check_file = 1;  // Stop adding data
+	          res = DC_STOP;  // Signal end of file
 	        }
 	      }
 
-	      if(file_recovery.data_check!=NULL)
+	      if(res == DC_CONTINUE && file_recovery.data_check!=NULL)
 		    res=file_recovery.data_check(buffer_olddata, 2*blocksize, &file_recovery);
-	      file_recovery.file_size+=blocksize;
+	      if(res == DC_CONTINUE)
+	      {
+	        file_recovery.file_size+=blocksize;
+	        // Check max filesize limit - stop recovery early if exceeded
+	        if(options->file_size_filter.max_file_size > 0 &&
+	           file_recovery.file_size > options->file_size_filter.max_file_size)
+	        {
+	          file_buffer_clear(&file_recovery);
+	          file_recovery.file_size = 0;
+	          need_to_check_file = 1;
+	          res = DC_STOP;
+	        }
+	      }
 	      if(res==DC_STOP || res==DC_ERROR)
 	      { /* EOF found */
 		    need_to_check_file=1;
@@ -664,7 +669,6 @@ static bf_status_t photorec_bf_frag(struct ph_param *params, const struct ph_opt
     // FIXED: Memory buffer state should not be shared between backup and original
     file_recovery_backup.memory_buffer = NULL;
     file_recovery_backup.buffer_size = 0;
-    file_recovery_backup.use_memory_buffering = 0;
     /* FIXME 16 100 250 */
     for(blocs_to_skip=-2;
 	blocs_to_skip<5000 &&
