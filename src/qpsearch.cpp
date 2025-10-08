@@ -205,7 +205,7 @@ pstatus_t QPhotorec::photorec_aux(alloc_data_t *list_search_space)
       {
 	if(data_check_status==DC_ERROR)
 	  file_recovery.file_size=0;
-	file_recovered=file_finish2(&file_recovery, params, options, list_search_space);
+	file_recovered=file_finish2(&file_recovery, params, options, list_search_space, NULL, 0);
 	if(options->lowmem > 0)
 	  forget(list_search_space,current_search_space);
       }
@@ -265,7 +265,7 @@ pstatus_t QPhotorec::photorec_aux(alloc_data_t *list_search_space)
 	  current_search_space, current_search_space->list.prev, current_search_space->list.next);
       log_trace("End of media\n");
 #endif
-      file_recovered=file_finish2(&file_recovery, params, options, list_search_space);
+      file_recovered=file_finish2(&file_recovery, params, options, list_search_space, NULL, 0);
       if(file_recovered!=PFSTATUS_BAD)
 	get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
       if(options->lowmem > 0)

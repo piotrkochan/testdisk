@@ -656,6 +656,42 @@ static void file_block_free(alloc_list_t *list_allocation)
 static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const struct ph_options *options, const int paranoid)
 {
 #ifndef DISABLED_FOR_FRAMAC
+  if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size)
+    file_recovery->file_size=0;
+
+    // if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size)
+
+/*   if(params->image_filter && has_any_image_size_filter(params->image_filter) && file_recovery->file_stat->file_hint->is_image ) {
+#ifdef DEBUG_FILE_FINISH
+    log_trace("Image filter check: file=%s, size=%llu, width=%u, height=%u\n",
+           file_recovery->filename,
+           (unsigned long long)file_recovery->file_size,
+           file_recovery->image_data.width,
+           file_recovery->image_data.height);
+#endif
+
+    /* // Check file size filter
+    
+    // Check image dimensions filter
+    else if(should_skip_image_by_dimensions(params->image_filter, file_recovery->image_data.width, file_recovery->image_data.height)) {
+        file_recovery->file_size=0;
+    } 
+  }*/
+
+  if(file_recovery->file_check_presave) {
+    if(!file_recovery->file_check_presave(file_recovery->memory_buffer, file_recovery->file_size, file_recovery)) {
+      file_recovery->file_size = 0;
+    }
+  }
+  
+  if(file_recovery->file_size==0)
+    return;
+
+  // File passed filters - flush to disk
+  if(flush_memory_buffer_to_file(file_recovery) < 0) {
+    file_recovery->file_size = 0;
+  }
+
   /*@ assert valid_file_recovery(file_recovery); */
   /*@ assert file_recovery->file_check == \null || \valid_function(file_recovery->file_check); */
   if(params->status!=STATUS_EXT2_ON_SAVE_EVERYTHING &&
@@ -666,6 +702,7 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
       /*@ assert \valid_function(file_recovery->file_check); */
       file_recovery->file_check(file_recovery);
     }
+
   /* FIXME: need to adapt read_size to volume size to avoid this */
   if(file_recovery->file_size > params->disk->disk_size)
     file_recovery->file_size = params->disk->disk_size;
@@ -682,28 +719,7 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
 #endif
     file_recovery->file_size=0;
   }
-  if(params->image_filter && has_any_image_size_filter(params->image_filter) &&
-     file_recovery->file_stat->file_hint->is_image ) {
-#ifdef DEBUG_FILE_FINISH
-    log_trace("Image filter check: file=%s, size=%llu, width=%u, height=%u\n",
-           file_recovery->filename,
-           (unsigned long long)file_recovery->file_size,
-           file_recovery->image_data.width,
-           file_recovery->image_data.height);
-#endif
 
-    // Check file size filter
-    if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size) {
-        file_recovery->file_size=0;
-    }
-    else if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size) {
-        file_recovery->file_size=0;
-    }
-    // Check image dimensions filter
-    else if(should_skip_image_by_dimensions(params->image_filter, file_recovery->image_data.width, file_recovery->image_data.height)) {
-        file_recovery->file_size=0;
-    }
-  }
   if(file_recovery->file_size==0)
   {
     if(paranoid==2)
@@ -722,6 +738,7 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
     log_critical("ftruncate failed.\n");
   }
 #endif
+
   fclose(file_recovery->handle);
   file_recovery->handle=NULL;
   if(file_recovery->time!=0 && file_recovery->time!=(time_t)-1)
@@ -758,28 +775,12 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
 int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
     const struct ph_options *options, alloc_data_t *list_search_space)
 {
-
   if(file_recovery->file_stat==NULL)
     return 0;
 
-  // Handle memory buffering for images with filtering
-  if(file_recovery->use_memory_buffering) {
-    if(file_recovery->image_filter && file_recovery->file_check_presave) {
-      if(!file_recovery->file_check_presave(file_recovery->memory_buffer, file_recovery->buffer_size, file_recovery)) {
-        // File rejected by filters - don't create it at all
-        reset_file_recovery(file_recovery);
-        return 0;
-      }
-    }
-    // File passed filters - flush to disk
-    if(flush_memory_buffer_to_file(file_recovery) < 0) {
-      reset_file_recovery(file_recovery);
-      return -1;
-    }
-  }
-
   if(file_recovery->handle)
     file_finish_aux(file_recovery, params, options, 2);
+
   if(file_recovery->file_size==0)
   {
     if(file_recovery->offset_error!=0)
@@ -793,25 +794,6 @@ int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
     reset_file_recovery(file_recovery);
     return 0;
   }
-
-  /* Check filesize filter (same as file_finish2) */
-  if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size)
-  {
-    file_block_truncate(file_recovery, list_search_space, params->blocksize);
-    file_block_free(&file_recovery->location);
-    unlink(file_recovery->filename);
-    reset_file_recovery(file_recovery);
-    return 0;
-  }
-  if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size)
-  {
-    file_block_truncate(file_recovery, list_search_space, params->blocksize);
-    file_block_free(&file_recovery->location);
-    unlink(file_recovery->filename);
-    reset_file_recovery(file_recovery);
-    return 0;
-  }
-
   file_block_truncate(file_recovery, list_search_space, params->blocksize);
   file_block_log(file_recovery, params->disk->sector_size);
 #ifdef ENABLE_DFXML
@@ -838,71 +820,23 @@ void file_recovery_aborted(file_recovery_t *file_recovery, struct ph_param *para
   reset_file_recovery(file_recovery);
 }
 
-pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const struct ph_options *options, alloc_data_t *list_search_space)
+pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const struct ph_options *options, alloc_data_t *list_search_space, unsigned char *full_file_buffer, uint64_t full_file_buffer_size)
 {
   int file_truncated;
-
-
   if(file_recovery->file_stat==NULL)
     return PFSTATUS_BAD;
-
-  // Handle memory buffering for images with filtering
-  if(file_recovery->use_memory_buffering) {
-    if(file_recovery->image_filter && file_recovery->file_check_presave) {
-      if(!file_recovery->file_check_presave(file_recovery->memory_buffer, file_recovery->buffer_size, file_recovery)) {
-        // File rejected by filters - don't create it at all
-        reset_file_recovery(file_recovery);
-        return PFSTATUS_BAD;
-      }
-    }
-    // File passed filters - flush to disk
-    if(flush_memory_buffer_to_file(file_recovery) < 0) {
-      reset_file_recovery(file_recovery);
-      return PFSTATUS_BAD;
-    }
-  }
-
-  if(file_recovery->handle) {
-    // For combined filters (image + filesize), skip paranoid file_check to avoid re-reading from disk
-    // The file was already validated in memory by file_check_presave
-    const int skip_paranoid = (file_recovery->image_filter &&
-                                file_recovery->file_size_filter &&
-                                (file_recovery->file_size_filter->min_file_size > 0 ||
-                                 file_recovery->file_size_filter->max_file_size > 0));
-    file_finish_aux(file_recovery, params, options, (skip_paranoid ? 0 : (options->paranoid==0?0:1)));
-  }
+  file_finish_aux(file_recovery, params, options, (options->paranoid==0?0:1));
   if(file_recovery->file_size==0)
   {
     file_block_truncate_zero(file_recovery, list_search_space);
     reset_file_recovery(file_recovery);
     return PFSTATUS_BAD;
   }
-  if(options->file_size_filter.min_file_size > 0 && file_recovery->file_size < options->file_size_filter.min_file_size)
-  {
-    /* DON'T use file_block_truncate_zero - it marks sectors as containing this file type,
-     * causing infinite rescanning! Just truncate without marking. */
-    file_block_truncate(file_recovery, list_search_space, params->blocksize);
-    file_block_free(&file_recovery->location);
-    unlink(file_recovery->filename);
-    reset_file_recovery(file_recovery);
-    return PFSTATUS_OK;
-  }
-  if(options->file_size_filter.max_file_size > 0 && file_recovery->file_size > options->file_size_filter.max_file_size)
-  {
-    /* DON'T use file_block_truncate_zero - it marks sectors as containing this file type,
-     * causing infinite rescanning! Just truncate without marking. */
-    file_block_truncate(file_recovery, list_search_space, params->blocksize);
-    file_block_free(&file_recovery->location);
-    unlink(file_recovery->filename);
-    reset_file_recovery(file_recovery);
-    return PFSTATUS_OK;
-  }
   file_truncated=file_block_truncate(file_recovery, list_search_space, params->blocksize);
   file_block_log(file_recovery, params->disk->sector_size);
 #ifdef ENABLE_DFXML
   xml_log_file_recovered(file_recovery);
 #endif
-
   file_block_free(&file_recovery->location);
   reset_file_recovery(file_recovery);
   return (file_truncated>0?PFSTATUS_OK_TRUNCATED:PFSTATUS_OK);
