@@ -45,7 +45,7 @@ void interface_options_photorec_cli(struct ph_options *options, char **current_c
     @ loop invariant valid_read_string(*current_cmd);
     @ loop assigns *current_cmd;
     @ loop assigns options->paranoid, options->keep_corrupted_file, options->mode_ext2;
-    @ loop assigns options->expert, options->lowmem;
+    @ loop assigns options->expert, options->lowmem, options->highmem;
     @*/
   while(1)
   {
@@ -87,6 +87,11 @@ void interface_options_photorec_cli(struct ph_options *options, char **current_c
     {
       options->lowmem=1;
     }
+    /* highmem */
+    else if(check_command(current_cmd,"highmem",7)==0)
+    {
+      options->highmem=1;
+    }
     else
     {
 #ifndef DISABLED_FOR_FRAMAC
@@ -103,9 +108,10 @@ void interface_options_photorec_log(const struct ph_options *options)
   /* write new options to log file */
   log_info("New options :\n Paranoid : %s\n", options->paranoid?"Yes":"No");
   log_info(" Brute force : %s\n", ((options->paranoid)>1?"Yes":"No"));
-  log_info(" Keep corrupted files : %s\n ext2/ext3 mode : %s\n Expert mode : %s\n Low memory : %s\n",
+  log_info(" Keep corrupted files : %s\n ext2/ext3 mode : %s\n Expert mode : %s\n Low memory : %s\n High memory : %s\n",
       options->keep_corrupted_file?"Yes":"No",
       options->mode_ext2?"Yes":"No",
       options->expert?"Yes":"No",
-      options->lowmem?"Yes":"No");
+      options->lowmem?"Yes":"No",
+      options->highmem?"Yes":"No");
 }

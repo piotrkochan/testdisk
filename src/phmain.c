@@ -182,6 +182,7 @@ int main( int argc, char **argv )
     .mode_ext2=0,
     .expert=0,
     .lowmem=0,
+    .highmem=0,
     .verbose=0,
     .list_file_format=array_file_enable
   };

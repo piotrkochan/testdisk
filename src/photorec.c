@@ -72,6 +72,34 @@
 /* #define DEBUG_FREE */
 uint64_t gpfh_nbr=0;
 
+#if defined(__CYGWIN__) || defined(__MINGW32__)
+#ifndef HAVE_SLEEP
+#define sleep(x) Sleep((x)*1000)
+#endif
+
+static FILE *fopen_with_retry(const char *path, const char *mode)
+{
+  FILE *handle;
+  if((handle=fopen(path, mode))!=NULL)
+    return handle;
+#ifdef __MINGW32__
+  Sleep(1000);
+#else
+  sleep(1);
+#endif
+  if((handle=fopen(path, mode))!=NULL)
+    return handle;
+#ifdef __MINGW32__
+  Sleep(2000);
+#else
+  sleep(2);
+#endif
+  if((handle=fopen(path, mode))!=NULL)
+    return handle;
+  return NULL;
+}
+#endif
+
 static void update_search_space_aux(alloc_data_t *list_search_space, uint64_t start, uint64_t end, alloc_data_t **new_current_search_space, uint64_t *offset);
 
 /*@
@@ -652,36 +680,11 @@ static void file_block_free(alloc_list_t *list_allocation)
   @ requires \separated(file_recovery, params, file_recovery->handle);
   @ decreases 0;
   @*/
-static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, const unsigned char *file_buffer, uint64_t file_buffer_size)
+static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid)
 {
 #ifndef DISABLED_FOR_FRAMAC
   /*@ assert valid_file_recovery(file_recovery); */
   /*@ assert file_recovery->file_check == \null || \valid_function(file_recovery->file_check); */
-  /* file_buffer and file_buffer_size contain the complete recovered file data */
-  /* Write the complete file from buffer if available */
-  if(file_buffer != NULL && file_buffer_size > 0 && file_recovery->handle != NULL)
-  {
-    /* Seek to beginning of file */
-    if(fseek(file_recovery->handle, 0, SEEK_SET) != 0)
-    {
-#ifndef DISABLED_FOR_FRAMAC
-      log_critical("fseek failed for %s: %s\n", file_recovery->filename, strerror(errno));
-#endif
-    }
-    /* Write the complete file from buffer */
-    if(fwrite(file_buffer, 1, file_buffer_size, file_recovery->handle) != file_buffer_size)
-    {
-#ifndef DISABLED_FOR_FRAMAC
-      log_critical("Cannot write to file %s: %s\n", file_recovery->filename, strerror(errno));
-#endif
-      file_recovery->file_size = 0;
-    }
-    else
-    {
-      /* Update file size to match what was actually written */
-      file_recovery->file_size = file_buffer_size;
-    }
-  }
   if(params->status!=STATUS_EXT2_ON_SAVE_EVERYTHING &&
       params->status!=STATUS_EXT2_OFF_SAVE_EVERYTHING &&
       file_recovery->file_stat!=NULL && file_recovery->file_check!=NULL && paranoid>0)
@@ -710,22 +713,28 @@ static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *par
   {
     if(paranoid==2)
       return ;
-    fclose(file_recovery->handle);
-    file_recovery->handle=NULL;
+    if(file_recovery->handle != NULL)
+    {
+      fclose(file_recovery->handle);
+      file_recovery->handle=NULL;
+    }
     /* File is zero-length; erase it */
     /*@ assert valid_read_string((const char *)file_recovery->filename); */
     unlink(file_recovery->filename);
     return;
   }
-#if defined(HAVE_FTRUNCATE)
-  fflush(file_recovery->handle);
-  if(ftruncate(fileno(file_recovery->handle), file_recovery->file_size)<0)
+  if (file_recovery->handle!=NULL)
   {
-    log_critical("ftruncate failed.\n");
-  }
+#if defined(HAVE_FTRUNCATE)
+    fflush(file_recovery->handle);
+    if(ftruncate(fileno(file_recovery->handle), file_recovery->file_size)<0)
+    {
+      log_critical("ftruncate failed.\n");
+    }
 #endif
-  fclose(file_recovery->handle);
-  file_recovery->handle=NULL;
+    fclose(file_recovery->handle);
+    file_recovery->handle=NULL;
+  }
   if(file_recovery->time!=0 && file_recovery->time!=(time_t)-1)
     set_date(file_recovery->filename, file_recovery->time, file_recovery->time);
   /*@ assert valid_file_recovery(file_recovery); */
@@ -763,7 +772,7 @@ int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
   if(file_recovery->file_stat==NULL)
     return 0;
   if(file_recovery->handle)
-    file_finish_aux(file_recovery, params, 2, NULL, 0);
+    file_finish_aux(file_recovery, params, 2);
   if(file_recovery->file_size==0)
   {
     if(file_recovery->offset_error!=0)
@@ -803,14 +812,42 @@ void file_recovery_aborted(file_recovery_t *file_recovery, struct ph_param *para
   reset_file_recovery(file_recovery);
 }
 
-pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, alloc_data_t *list_search_space, const unsigned char *file_buffer, uint64_t file_buffer_size)
+pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, struct ph_options *options, alloc_data_t *list_search_space, const unsigned char *file_buffer, uint64_t file_buffer_size)
 {
   int file_truncated;
   if(file_recovery->file_stat==NULL)
     return PFSTATUS_BAD;
-  /* file_buffer and file_buffer_size contain the complete recovered file data */
+
+  if(options->highmem)
+  {
+    photorec_fopen(file_recovery, params, 0);
+    if(file_buffer != NULL && file_buffer_size > 0)
+    {
+      /* Seek to beginning of file */
+      if(fseek(file_recovery->handle, 0, SEEK_SET) != 0)
+      {
+  #ifndef DISABLED_FOR_FRAMAC
+        log_critical("fseek failed for %s: %s\n", file_recovery->filename, strerror(errno));
+  #endif
+      }
+      /* Write the complete file from buffer */
+      if(fwrite(file_buffer, 1, file_buffer_size, file_recovery->handle) != file_buffer_size)
+      {
+  #ifndef DISABLED_FOR_FRAMAC
+        log_critical("Cannot write to file %s: %s\n", file_recovery->filename, strerror(errno));
+  #endif
+        file_recovery->file_size = 0;
+      }
+      else
+      {
+        /* Update file size to match what was actually written */
+        file_recovery->file_size = file_buffer_size;
+      }
+    }
+  }
+  
   if(file_recovery->handle)
-    file_finish_aux(file_recovery, params, (paranoid==0?0:1), file_buffer, file_buffer_size);
+    file_finish_aux(file_recovery, params, (options->paranoid == 0 ? 0 : 1));
   if(file_recovery->file_size==0)
   {
     file_block_truncate_zero(file_recovery, list_search_space);
@@ -874,6 +911,27 @@ void free_search_space(alloc_data_t *list_search_space)
     td_list_del(search_walker);
     free(current_search_space);
   }
+}
+
+pstatus_t photorec_fopen(file_recovery_t *file_recovery, struct ph_param *params, const uint64_t offset)
+{
+  if(file_recovery->file_stat->file_hint->recover==1)
+  {
+#if defined(__CYGWIN__) || defined(__MINGW32__)
+    file_recovery->handle=fopen_with_retry(file_recovery->filename,"w+b");
+#else
+    file_recovery->handle=fopen(file_recovery->filename,"w+b");
+#endif
+    if(!file_recovery->handle)
+    {
+#ifndef __FRAMAC__
+      log_critical("Cannot create file %s: %s\n", file_recovery->filename, strerror(errno));
+#endif
+      params->offset=offset;
+      return PSTATUS_EACCES;
+    }
+  }
+  return PSTATUS_OK;
 }
 
 void set_filename(file_recovery_t *file_recovery, struct ph_param *params)

@@ -126,19 +126,17 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
   uint64_t offset_before_back=0;
   unsigned int back=0;
 
-  const uint64_t size_teng = 10ULL * 1024 * 1024 * 1024; /* 10GB max */
+  const uint64_t max_buffer_size = 10ULL * 1024 * 1024 * 1024; /* 10GB max */
   // const uint64_t max_buffer_size = 10ULL * 1024 * 1024 * 1024; /* 10GB max */
   // const uint64_t max_buffer_size = 20ULL * 1024 * 1024 * 1024; /* 20GB max */
   // const uint64_t max_buffer_size = 50ULL * 1024 * 1024; /* 50MB max */
   // const uint64_t max_buffer_size = 10ULL * 1024 * 1024; /* 10MB max */
   // const uint64_t max_buffer_size = 10ULL * 1024; /* 10K max */
-  uint64_t max_buffer_size = get_max_filesize_from_enabled_formats(options); /* dynamic */
+  /* uint64_t max_buffer_size = get_max_filesize_from_enabled_formats(options);
   if(max_buffer_size > size_teng) {
     max_buffer_size = size_teng;
-  }
+  } */
 
-  log_info("Memory buffer size is: %u", max_buffer_size);
-  
   /*@ assert blocksize == 512; */
   /*@ assert buffer_size == blocksize + READ_SIZE ; */
 #ifdef DISABLED_FOR_FRAMAC
@@ -212,7 +210,7 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
     if(file_recovery.file_stat!=NULL)
     {
       /* Allocate file buffer when header is first detected */
-      if(file_buffer == NULL && file_recovery.file_stat->file_hint != NULL)
+      if(options->highmem && file_buffer == NULL && file_recovery.file_stat->file_hint != NULL)
       {
         uint64_t buffer_capacity;
 
@@ -223,9 +221,7 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
             buffer_capacity = max_buffer_size;
         }
         else
-        {
-          buffer_capacity = max_buffer_size; /* 10GB default */
-        }
+          buffer_capacity = max_buffer_size;
 
         file_buffer = (unsigned char *)MALLOC(buffer_capacity);
         if(file_buffer != NULL)
@@ -239,127 +235,120 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
           file_recovery.file_size >= 12*blocksize &&
           ind_block(buffer,blocksize)!=0)
       {
-	/*@ assert valid_file_recovery(&file_recovery); */
-	file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 0);
-	/*@ assert valid_file_recovery(&file_recovery); */
-	data_check_status=DC_CONTINUE;
+        /*@ assert valid_file_recovery(&file_recovery); */
+        file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 0);
+        /*@ assert valid_file_recovery(&file_recovery); */
+        data_check_status=DC_CONTINUE;
 #ifndef DISABLED_FOR_FRAMAC
         if(options->verbose > 1)
         {
           log_verbose("Skipping sector %10lu/%lu\n",
-              (unsigned long)((offset-params->partition->part_offset)/params->disk->sector_size),
-              (unsigned long)((params->partition->part_size-1)/params->disk->sector_size));
+            (unsigned long)((offset-params->partition->part_offset)/params->disk->sector_size),
+            (unsigned long)((params->partition->part_size-1)/params->disk->sector_size));
         }
 #endif
         memcpy(buffer, buffer_olddata, blocksize);
       }
       else
       {
-	/* if(file_recovery.handle!=NULL)
-	{
-	  if(fwrite(buffer,blocksize,1,file_recovery.handle)<1)
-	  {
+        if(file_recovery.handle!=NULL)
+        {
+          if(!options->highmem && fwrite(buffer,blocksize,1,file_recovery.handle)<1)
+          {
 #ifndef DISABLED_FOR_FRAMAC
-	    log_critical("Cannot write to file %s after %llu bytes: %s\n", file_recovery.filename, (long long unsigned)file_recovery.file_size, strerror(errno));
+            log_critical("Cannot write to file %s after %llu bytes: %s\n", file_recovery.filename, (long long unsigned)file_recovery.file_size, strerror(errno));
 #endif
-	    if(errno==EFBIG)
-	    {
-	      // File is too big for the destination filesystem
-	      data_check_status=DC_STOP;
-	    }
-	    else
-	    {
-	      // Warn the userF
-	      ind_stop=PSTATUS_ENOSPC;
-	      params->offset=file_recovery.location.start;
-	    }
-	  }
-	  else
-	  {
-	    // Append to file buffer if there's space
-	    if(file_buffer_size + blocksize <= file_buffer_capacity)
-	    {
-	      memcpy(file_buffer + file_buffer_size, buffer, blocksize);
-	      file_buffer_size += blocksize;
-	    }
-	  }
-	} */
-	if(ind_stop==PSTATUS_OK)
-	{
-	  /*@ assert valid_file_recovery(&file_recovery); */
-	  file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
-	  /*@ assert valid_file_recovery(&file_recovery); */
-	  /* Append to file buffer if there's space */
-	  if(file_buffer != NULL && file_buffer_size + blocksize <= file_buffer_capacity)
-	  {
-	    memcpy(file_buffer + file_buffer_size, buffer, blocksize);
-	    file_buffer_size += blocksize;
-	  }
-	  else if(file_buffer != NULL && file_buffer_size + blocksize > file_buffer_capacity)
-	  {
-	    /* Buffer is full */
-	    if(0) /* TODO: add condition for dynamic buffer growth */
-	    {
-	      /* Grow buffer by 2x or to needed size, whichever is larger */
-	      uint64_t new_capacity = file_buffer_capacity * 2;
+            if(errno==EFBIG)
+            {
+              // File is too big for the destination filesystem
+              data_check_status=DC_STOP;
+            }
+            else
+            {
+              // Warn the userF
+              ind_stop=PSTATUS_ENOSPC;
+              params->offset=file_recovery.location.start;
+            }
+          }
+        }
+        if(ind_stop==PSTATUS_OK)
+        {
+          /*@ assert valid_file_recovery(&file_recovery); */
+          file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
+          /*@ assert valid_file_recovery(&file_recovery); */
+          if(options->highmem) {
+            /* Append to file buffer if there's space */
+            if(file_buffer != NULL && file_buffer_size + blocksize <= file_buffer_capacity)
+            {
+              memcpy(file_buffer + file_buffer_size, buffer, blocksize);
+              file_buffer_size += blocksize;
+            }
+            else if(file_buffer != NULL && file_buffer_size + blocksize > file_buffer_capacity)
+            {
+              /* Buffer is full */
+              if(0) /* TODO: add condition for dynamic buffer growth */
+              {
+                /* Grow buffer by 2x or to needed size, whichever is larger */
+                uint64_t new_capacity = file_buffer_capacity * 2;
 
-	      if(new_capacity > max_buffer_size)
-		      new_capacity = max_buffer_size;
+                if(new_capacity > max_buffer_size)
+                  new_capacity = max_buffer_size;
 
-	      if(new_capacity > file_buffer_capacity)
-	      {
-		unsigned char *new_buffer = (unsigned char *)realloc(file_buffer, new_capacity);
-		if(new_buffer != NULL)
-		{
-		  file_buffer = new_buffer;
-		  file_buffer_capacity = new_capacity;
-		  /* Now add the block */
-		  memcpy(file_buffer + file_buffer_size, buffer, blocksize);
-		  file_buffer_size += blocksize;
-		}
-		else
-		{
-		  /* realloc failed - stop recovery of this file */
+                if(new_capacity > file_buffer_capacity)
+                {
+                  unsigned char *new_buffer = (unsigned char *)realloc(file_buffer, new_capacity);
+                  if(new_buffer != NULL)
+                  {
+                    file_buffer = new_buffer;
+                    file_buffer_capacity = new_capacity;
+                    /* Now add the block */
+                    memcpy(file_buffer + file_buffer_size, buffer, blocksize);
+                    file_buffer_size += blocksize;
+                  }
+                  else
+                  {
+                    /* realloc failed - stop recovery of this file */
+  #ifndef DISABLED_FOR_FRAMAC
+                    log_error("Failed to grow file buffer, stopping recovery of current file\n");
+  #endif
+                    data_check_status=DC_STOP;
+                  }
+                }
+                else
+                {
+                  /* Already at max size - stop recovery */
+  #ifndef DISABLED_FOR_FRAMAC
+                  log_error("File buffer at maximum size, stopping recovery of current file\n");
+  #endif
+                  data_check_status=DC_STOP;
+                }
+              }
+              else
+              {
+                /* Buffer full and growth disabled - stop recovery of this file */
+  #ifndef DISABLED_FOR_FRAMAC
+                log_error("File buffer full, stopping recovery of current file\n");
+  #endif
+                data_check_status=DC_STOP;
+              }
+            }
+          }
+          if(data_check_status!=DC_STOP)
+          {
+            if(file_recovery.data_check!=NULL)
+              data_check_status=file_recovery.data_check(buffer_olddata,2*blocksize,&file_recovery);
+            else
+              data_check_status=DC_CONTINUE;
+          }
+          file_recovery.file_size+=blocksize;
 #ifndef DISABLED_FOR_FRAMAC
-		  log_error("Failed to grow file buffer, stopping recovery of current file\n");
+          if(data_check_status==DC_STOP)
+          {
+            if(options->verbose > 1)
+              log_trace("EOF found\n");
+          }
 #endif
-		  data_check_status=DC_STOP;
-		}
-	      }
-	      else
-	      {
-		/* Already at max size - stop recovery */
-#ifndef DISABLED_FOR_FRAMAC
-		log_error("File buffer at maximum size, stopping recovery of current file\n");
-#endif
-		data_check_status=DC_STOP;
-	      }
-	    }
-	    else
-	    {
-	      /* Buffer full and growth disabled - stop recovery of this file */
-#ifndef DISABLED_FOR_FRAMAC
-	      log_error("File buffer full, stopping recovery of current file\n");
-#endif
-	      data_check_status=DC_STOP;
-	    }
-	  }
-	  if(data_check_status!=DC_STOP)
-	  {
-	    if(file_recovery.data_check!=NULL)
-	      data_check_status=file_recovery.data_check(buffer_olddata,2*blocksize,&file_recovery);
-	    else
-	      data_check_status=DC_CONTINUE;
-	  }
-	  file_recovery.file_size+=blocksize;
-#ifndef DISABLED_FOR_FRAMAC
-	  if(data_check_status==DC_STOP)
-	  {
-	    if(options->verbose > 1)
-	      log_trace("EOF found\n");
-	  }
-#endif
-	}
+        }
       }
       if(data_check_status!=DC_STOP && data_check_status!=DC_ERROR && file_recovery.file_stat->file_hint->max_filesize>0 && file_recovery.file_size>=file_recovery.file_stat->file_hint->max_filesize)
       {
@@ -379,13 +368,25 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
       }
       if(data_check_status==DC_STOP || data_check_status==DC_ERROR)
       {
-	if(data_check_status==DC_ERROR)
-	  file_recovery.file_size=0;
-	file_recovered=file_finish2(&file_recovery, params, options->paranoid, list_search_space, file_buffer, file_buffer_size);
-	/* Clear file buffer for next file */
-	file_buffer_size=0;
-	if(options->lowmem > 0)
-	  forget(list_search_space,current_search_space);
+        if(data_check_status==DC_ERROR)
+          file_recovery.file_size=0;
+        
+        // unsigned int fopen_failed = 0;
+        // // fopen late on highmem
+        // if(options->highmem) {
+        //   pstatus_t fopen_result = photorec_fopen(&file_recovery, params, offset);
+        //   if(fopen_result != PSTATUS_OK) {
+        //       data_check_status = fopen_result;
+        //       fopen_failed = 1;
+        //   }
+        // }
+        // if(!fopen_failed) {
+          file_recovered=file_finish2(&file_recovery, params, options, list_search_space, file_buffer, file_buffer_size);
+          /* Clear file buffer for next file */
+          file_buffer_size=0;
+          if(options->lowmem > 0)
+            forget(list_search_space,current_search_space);
+        // }
       }
     }
     if(ind_stop!=PSTATUS_OK)
@@ -407,57 +408,67 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
     {
       if(data_check_status==DC_SCAN)
       {
-	if(file_recovered_old==PFSTATUS_OK)
-	{
-	  offset_before_back=offset;
-	  if(back < 5 &&
-	      get_prev_file_header(list_search_space, &current_search_space, &offset)==0)
-	  {
-	    back++;
-	  }
-	  else
-	  {
-	    back=0;
-	    get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
-	  }
-	}
-	else
-	{
-	  get_next_sector(list_search_space, &current_search_space,&offset,blocksize);
-	  if(offset > offset_before_back)
-	    back=0;
-	}
+        if(file_recovered_old==PFSTATUS_OK)
+        {
+          offset_before_back=offset;
+          if(back < 5 &&
+              get_prev_file_header(list_search_space, &current_search_space, &offset)==0)
+          {
+            back++;
+          }
+          else
+          {
+            back=0;
+            get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
+          }
+        }
+        else
+        {
+          get_next_sector(list_search_space, &current_search_space,&offset,blocksize);
+          if(offset > offset_before_back)
+            back=0;
+        }
       }
     }
     else if(file_recovered==PFSTATUS_OK_TRUNCATED)
     {
       /* try to recover the previous file, otherwise stay at the current location */
       offset_before_back=offset;
-      if(back < 5 &&
-	  get_prev_file_header(list_search_space, &current_search_space, &offset)==0)
+      if(back < 5 && get_prev_file_header(list_search_space, &current_search_space, &offset)==0)
       {
-	back++;
+	      back++;
       }
       else
       {
-	back=0;
-	get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
+        back=0;
+        get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
       }
     }
     if(current_search_space==list_search_space)
     {
 #ifdef DEBUG_GET_NEXT_SECTOR
       log_trace("current_search_space==list_search_space=%p (prev=%p,next=%p)\n",
-	  current_search_space, current_search_space->list.prev, current_search_space->list.next);
+	    current_search_space, current_search_space->list.prev, current_search_space->list.next);
       log_trace("End of media\n");
 #endif
-      file_recovered=file_finish2(&file_recovery, params, options->paranoid, list_search_space, file_buffer, file_buffer_size);
-      /* Clear file buffer */
-      file_buffer_size=0;
-      if(file_recovered!=PFSTATUS_BAD)
-	get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
-      if(options->lowmem > 0)
-	forget(list_search_space,current_search_space);
+      // unsigned int fopen_failed = 0;
+      // // fopen late on highmem
+      // if(options->highmem) {
+      //   pstatus_t fopen_result = photorec_fopen(&file_recovery, params, offset);
+      //   if(fopen_result != PSTATUS_OK) {
+      //       file_recovered = PFSTATUS_BAD;
+      //       fopen_failed = 1;
+      //   }
+      // }
+      // if(!fopen_failed) {
+        file_recovered=file_finish2(&file_recovery, params, options, list_search_space, file_buffer, file_buffer_size);
+        /* Clear file buffer */
+        file_buffer_size=0;
+        if(file_recovered!=PFSTATUS_BAD)
+          get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
+        if(options->lowmem > 0)
+          forget(list_search_space,current_search_space);
+      // }
     }
     buffer_olddata+=blocksize;
     buffer+=blocksize;
@@ -498,22 +509,22 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
           ind_stop=photorec_progressbar(stdscr, params->pass, params, offset, current_time);
 #endif
           json_log_progress(params, params->pass, offset);
-	  params->offset=offset;
-	  if(need_to_stop!=0 || ind_stop!=PSTATUS_OK)
-	  {
+          params->offset=offset;
+          if(need_to_stop!=0 || ind_stop!=PSTATUS_OK)
+          {
 #ifndef DISABLED_FOR_FRAMAC
-	    log_info("PhotoRec has been stopped\n");
+            log_info("PhotoRec has been stopped\n");
 #endif
-	    file_recovery_aborted(&file_recovery, params, list_search_space);
+            file_recovery_aborted(&file_recovery, params, list_search_space);
 #ifndef DISABLED_FOR_FRAMAC
-	    if(file_buffer != NULL)
-	      free(file_buffer);
-	    free(buffer_start);
+            if(file_buffer != NULL)
+              free(file_buffer);
+            free(buffer_start);
 #endif
-	    return PSTATUS_STOP;
-	  }
-	  if(current_time >= next_checkpoint)
-	    next_checkpoint=regular_session_save(list_search_space, params, options, current_time);
+            return PSTATUS_STOP;
+          }
+          if(current_time >= next_checkpoint)
+            next_checkpoint=regular_session_save(list_search_space, params, options, current_time);
         }
       }
     }

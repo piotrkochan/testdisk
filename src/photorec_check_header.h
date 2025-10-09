@@ -110,7 +110,7 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
     if(options->verbose > 1)
       log_trace("A known header has been found, recovery of the previous file is finished\n");
 #endif
-    *file_recovered=file_finish2(file_recovery, params, options->paranoid, list_search_space, NULL, 0);
+    *file_recovered=file_finish2(file_recovery, params, options, list_search_space, NULL, 0);
     if(*file_recovered==PFSTATUS_OK_TRUNCATED)
       return PSTATUS_OK;
   }
@@ -135,7 +135,11 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
   }
 #endif
   set_filename(file_recovery, params);
-  if(file_recovery->file_stat->file_hint->recover==1)
+  
+  // if(!options->highmem)
+    // return photorec_fopen(file_recovery, params, offset);
+
+  if(!options->highmem && file_recovery->file_stat->file_hint->recover==1)
   {
 #if defined(__CYGWIN__) || defined(__MINGW32__)
     file_recovery->handle=fopen_with_retry(file_recovery->filename,"w+b");
@@ -205,11 +209,11 @@ inline static pstatus_t photorec_check_header(file_recovery_t *file_recovery, st
       /*@ assert \valid_function(file_check->header_check); */
       /*@ assert valid_file_check_node(file_check); */
       if((file_check->length==0 || memcmp(buffer + file_check->offset, file_check->value, file_check->length)==0) &&
-	  file_check->header_check(buffer, read_size, 0, file_recovery, &file_recovery_new)!=0)
+	      file_check->header_check(buffer, read_size, 0, file_recovery, &file_recovery_new)!=0)
       {
-	file_recovery_new.file_stat=file_check->file_stat;
-	/*@ assert valid_file_recovery(&file_recovery_new); */
-	return photorec_header_found(&file_recovery_new, file_recovery, params, options, list_search_space, buffer, file_recovered, offset);
+        file_recovery_new.file_stat=file_check->file_stat;
+        /*@ assert valid_file_recovery(&file_recovery_new); */
+        return photorec_header_found(&file_recovery_new, file_recovery, params, options, list_search_space, buffer, file_recovered, offset);
       }
     }
   }
