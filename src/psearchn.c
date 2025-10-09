@@ -77,6 +77,34 @@
 #define READ_SIZE 1024*512
 extern int need_to_stop;
 
+/*
+ * Find maximum max_filesize among all enabled file formats
+ * Returns 0 if no enabled formats have max_filesize set
+ */
+static uint64_t get_max_filesize_from_enabled_formats(const struct ph_options *options)
+{
+  uint64_t max_size = 0;
+  file_enable_t *file_enable;
+
+  if(options == NULL || options->list_file_format == NULL)
+    return 0;
+
+  for(file_enable = options->list_file_format;
+      file_enable->file_hint != NULL;
+      file_enable++)
+  {
+    /* Only consider enabled file formats */
+    if(file_enable->enable != 0 &&
+       file_enable->file_hint->max_filesize > 0)
+    {
+      if(file_enable->file_hint->max_filesize > max_size)
+        max_size = file_enable->file_hint->max_filesize;
+    }
+  }
+
+  return max_size;
+}
+
 pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options, alloc_data_t *list_search_space)
 {
   pstatus_t ind_stop=PSTATUS_OK;
@@ -85,6 +113,9 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
   unsigned char *buffer_start;
   unsigned char *buffer_olddata;
   unsigned char *buffer;
+  unsigned char *file_buffer;
+  uint64_t file_buffer_size;
+  uint64_t file_buffer_capacity;
   time_t start_time;
   time_t previous_time;
   time_t next_checkpoint;
@@ -94,6 +125,20 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
   const unsigned int read_size=(blocksize>65536?blocksize:65536);
   uint64_t offset_before_back=0;
   unsigned int back=0;
+
+  const uint64_t size_teng = 10ULL * 1024 * 1024 * 1024; /* 10GB max */
+  // const uint64_t max_buffer_size = 10ULL * 1024 * 1024 * 1024; /* 10GB max */
+  // const uint64_t max_buffer_size = 20ULL * 1024 * 1024 * 1024; /* 20GB max */
+  // const uint64_t max_buffer_size = 50ULL * 1024 * 1024; /* 50MB max */
+  // const uint64_t max_buffer_size = 10ULL * 1024 * 1024; /* 10MB max */
+  // const uint64_t max_buffer_size = 10ULL * 1024; /* 10K max */
+  uint64_t max_buffer_size = get_max_filesize_from_enabled_formats(options); /* dynamic */
+  if(max_buffer_size > size_teng) {
+    max_buffer_size = size_teng;
+  }
+
+  log_info("Memory buffer size is: %u", max_buffer_size);
+  
   /*@ assert blocksize == 512; */
   /*@ assert buffer_size == blocksize + READ_SIZE ; */
 #ifdef DISABLED_FOR_FRAMAC
@@ -114,6 +159,10 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
   /*@ assert \valid((char *)buffer_start + (0 .. buffer_size-1)); */
   buffer_olddata=buffer_start;
   buffer=buffer_olddata+blocksize;
+  /* File buffer will be allocated when file header is detected */
+  file_buffer = NULL;
+  file_buffer_size = 0;
+  file_buffer_capacity = 0;
   /*@ assert \valid(buffer_start + (0 .. blocksize + READ_SIZE-1)); */
   /*@ assert \valid(buffer + (0 .. READ_SIZE-1)); */
   start_time=time(NULL);
@@ -162,6 +211,29 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
     /*@ assert valid_file_recovery(&file_recovery); */
     if(file_recovery.file_stat!=NULL)
     {
+      /* Allocate file buffer when header is first detected */
+      if(file_buffer == NULL && file_recovery.file_stat->file_hint != NULL)
+      {
+        uint64_t buffer_capacity;
+
+        if(file_recovery.file_stat->file_hint->max_filesize > 0)
+        {
+          buffer_capacity = file_recovery.file_stat->file_hint->max_filesize;
+          if(buffer_capacity > max_buffer_size)
+            buffer_capacity = max_buffer_size;
+        }
+        else
+        {
+          buffer_capacity = max_buffer_size; /* 10GB default */
+        }
+
+        file_buffer = (unsigned char *)MALLOC(buffer_capacity);
+        if(file_buffer != NULL)
+        {
+          file_buffer_capacity = buffer_capacity;
+          file_buffer_size = 0;
+        }
+      }
     /* try to skip ext2/ext3 indirect block */
       if((params->status==STATUS_EXT2_ON || params->status==STATUS_EXT2_ON_SAVE_EVERYTHING) &&
           file_recovery.file_size >= 12*blocksize &&
@@ -183,35 +255,102 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
       }
       else
       {
-	if(file_recovery.handle!=NULL)
+	/* if(file_recovery.handle!=NULL)
 	{
 	  if(fwrite(buffer,blocksize,1,file_recovery.handle)<1)
-	  { 
+	  {
 #ifndef DISABLED_FOR_FRAMAC
 	    log_critical("Cannot write to file %s after %llu bytes: %s\n", file_recovery.filename, (long long unsigned)file_recovery.file_size, strerror(errno));
 #endif
 	    if(errno==EFBIG)
 	    {
-	      /* File is too big for the destination filesystem */
+	      // File is too big for the destination filesystem
 	      data_check_status=DC_STOP;
 	    }
 	    else
 	    {
-	      /* Warn the user */
+	      // Warn the userF
 	      ind_stop=PSTATUS_ENOSPC;
 	      params->offset=file_recovery.location.start;
 	    }
 	  }
-	}
+	  else
+	  {
+	    // Append to file buffer if there's space
+	    if(file_buffer_size + blocksize <= file_buffer_capacity)
+	    {
+	      memcpy(file_buffer + file_buffer_size, buffer, blocksize);
+	      file_buffer_size += blocksize;
+	    }
+	  }
+	} */
 	if(ind_stop==PSTATUS_OK)
 	{
 	  /*@ assert valid_file_recovery(&file_recovery); */
 	  file_block_append(&file_recovery, list_search_space, &current_search_space, &offset, blocksize, 1);
 	  /*@ assert valid_file_recovery(&file_recovery); */
-	  if(file_recovery.data_check!=NULL)
-	    data_check_status=file_recovery.data_check(buffer_olddata,2*blocksize,&file_recovery);
-	  else
-	    data_check_status=DC_CONTINUE;
+	  /* Append to file buffer if there's space */
+	  if(file_buffer != NULL && file_buffer_size + blocksize <= file_buffer_capacity)
+	  {
+	    memcpy(file_buffer + file_buffer_size, buffer, blocksize);
+	    file_buffer_size += blocksize;
+	  }
+	  else if(file_buffer != NULL && file_buffer_size + blocksize > file_buffer_capacity)
+	  {
+	    /* Buffer is full */
+	    if(0) /* TODO: add condition for dynamic buffer growth */
+	    {
+	      /* Grow buffer by 2x or to needed size, whichever is larger */
+	      uint64_t new_capacity = file_buffer_capacity * 2;
+
+	      if(new_capacity > max_buffer_size)
+		      new_capacity = max_buffer_size;
+
+	      if(new_capacity > file_buffer_capacity)
+	      {
+		unsigned char *new_buffer = (unsigned char *)realloc(file_buffer, new_capacity);
+		if(new_buffer != NULL)
+		{
+		  file_buffer = new_buffer;
+		  file_buffer_capacity = new_capacity;
+		  /* Now add the block */
+		  memcpy(file_buffer + file_buffer_size, buffer, blocksize);
+		  file_buffer_size += blocksize;
+		}
+		else
+		{
+		  /* realloc failed - stop recovery of this file */
+#ifndef DISABLED_FOR_FRAMAC
+		  log_error("Failed to grow file buffer, stopping recovery of current file\n");
+#endif
+		  data_check_status=DC_STOP;
+		}
+	      }
+	      else
+	      {
+		/* Already at max size - stop recovery */
+#ifndef DISABLED_FOR_FRAMAC
+		log_error("File buffer at maximum size, stopping recovery of current file\n");
+#endif
+		data_check_status=DC_STOP;
+	      }
+	    }
+	    else
+	    {
+	      /* Buffer full and growth disabled - stop recovery of this file */
+#ifndef DISABLED_FOR_FRAMAC
+	      log_error("File buffer full, stopping recovery of current file\n");
+#endif
+	      data_check_status=DC_STOP;
+	    }
+	  }
+	  if(data_check_status!=DC_STOP)
+	  {
+	    if(file_recovery.data_check!=NULL)
+	      data_check_status=file_recovery.data_check(buffer_olddata,2*blocksize,&file_recovery);
+	    else
+	      data_check_status=DC_CONTINUE;
+	  }
 	  file_recovery.file_size+=blocksize;
 #ifndef DISABLED_FOR_FRAMAC
 	  if(data_check_status==DC_STOP)
@@ -242,7 +381,9 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
       {
 	if(data_check_status==DC_ERROR)
 	  file_recovery.file_size=0;
-	file_recovered=file_finish2(&file_recovery, params, options->paranoid, list_search_space);
+	file_recovered=file_finish2(&file_recovery, params, options->paranoid, list_search_space, file_buffer, file_buffer_size);
+	/* Clear file buffer for next file */
+	file_buffer_size=0;
 	if(options->lowmem > 0)
 	  forget(list_search_space,current_search_space);
       }
@@ -256,6 +397,8 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
       file_recovery_aborted(&file_recovery, params, list_search_space);
       /*@ assert valid_file_recovery(&file_recovery); */
 #ifndef DISABLED_FOR_FRAMAC
+      if(file_buffer != NULL)
+        free(file_buffer);
       free(buffer_start);
 #endif
       return ind_stop;
@@ -308,7 +451,9 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
 	  current_search_space, current_search_space->list.prev, current_search_space->list.next);
       log_trace("End of media\n");
 #endif
-      file_recovered=file_finish2(&file_recovery, params, options->paranoid, list_search_space);
+      file_recovered=file_finish2(&file_recovery, params, options->paranoid, list_search_space, file_buffer, file_buffer_size);
+      /* Clear file buffer */
+      file_buffer_size=0;
       if(file_recovered!=PFSTATUS_BAD)
 	get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
       if(options->lowmem > 0)
@@ -361,6 +506,8 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
 #endif
 	    file_recovery_aborted(&file_recovery, params, list_search_space);
 #ifndef DISABLED_FOR_FRAMAC
+	    if(file_buffer != NULL)
+	      free(file_buffer);
 	    free(buffer_start);
 #endif
 	    return PSTATUS_STOP;
@@ -373,6 +520,8 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
     file_recovered_old=file_recovered;
   } /* end while(current_search_space!=list_search_space) */
 #ifndef DISABLED_FOR_FRAMAC
+  if(file_buffer != NULL)
+    free(file_buffer);
   free(buffer_start);
 #endif
 #endif

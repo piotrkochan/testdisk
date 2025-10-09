@@ -652,11 +652,36 @@ static void file_block_free(alloc_list_t *list_allocation)
   @ requires \separated(file_recovery, params, file_recovery->handle);
   @ decreases 0;
   @*/
-static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid)
+static void file_finish_aux(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, const unsigned char *file_buffer, uint64_t file_buffer_size)
 {
 #ifndef DISABLED_FOR_FRAMAC
   /*@ assert valid_file_recovery(file_recovery); */
   /*@ assert file_recovery->file_check == \null || \valid_function(file_recovery->file_check); */
+  /* file_buffer and file_buffer_size contain the complete recovered file data */
+  /* Write the complete file from buffer if available */
+  if(file_buffer != NULL && file_buffer_size > 0 && file_recovery->handle != NULL)
+  {
+    /* Seek to beginning of file */
+    if(fseek(file_recovery->handle, 0, SEEK_SET) != 0)
+    {
+#ifndef DISABLED_FOR_FRAMAC
+      log_critical("fseek failed for %s: %s\n", file_recovery->filename, strerror(errno));
+#endif
+    }
+    /* Write the complete file from buffer */
+    if(fwrite(file_buffer, 1, file_buffer_size, file_recovery->handle) != file_buffer_size)
+    {
+#ifndef DISABLED_FOR_FRAMAC
+      log_critical("Cannot write to file %s: %s\n", file_recovery->filename, strerror(errno));
+#endif
+      file_recovery->file_size = 0;
+    }
+    else
+    {
+      /* Update file size to match what was actually written */
+      file_recovery->file_size = file_buffer_size;
+    }
+  }
   if(params->status!=STATUS_EXT2_ON_SAVE_EVERYTHING &&
       params->status!=STATUS_EXT2_OFF_SAVE_EVERYTHING &&
       file_recovery->file_stat!=NULL && file_recovery->file_check!=NULL && paranoid>0)
@@ -738,7 +763,7 @@ int file_finish_bf(file_recovery_t *file_recovery, struct ph_param *params,
   if(file_recovery->file_stat==NULL)
     return 0;
   if(file_recovery->handle)
-    file_finish_aux(file_recovery, params, 2);
+    file_finish_aux(file_recovery, params, 2, NULL, 0);
   if(file_recovery->file_size==0)
   {
     if(file_recovery->offset_error!=0)
@@ -778,13 +803,14 @@ void file_recovery_aborted(file_recovery_t *file_recovery, struct ph_param *para
   reset_file_recovery(file_recovery);
 }
 
-pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, alloc_data_t *list_search_space)
+pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, alloc_data_t *list_search_space, const unsigned char *file_buffer, uint64_t file_buffer_size)
 {
   int file_truncated;
   if(file_recovery->file_stat==NULL)
     return PFSTATUS_BAD;
+  /* file_buffer and file_buffer_size contain the complete recovered file data */
   if(file_recovery->handle)
-    file_finish_aux(file_recovery, params, (paranoid==0?0:1));
+    file_finish_aux(file_recovery, params, (paranoid==0?0:1), file_buffer, file_buffer_size);
   if(file_recovery->file_size==0)
   {
     file_block_truncate_zero(file_recovery, list_search_space);

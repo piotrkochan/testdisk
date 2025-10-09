@@ -740,7 +740,7 @@ static pstatus_t photorec_bf_aux(struct ph_param *params, file_recovery_t *file_
       &current_search_space, &offset, buffer);
   ind_stop=photorec_bf_frag(params, file_recovery, list_search_space, current_search_space, phase, &current_search_space, &offset, buffer, block_buffer, 0);
   free(buffer);
-  (void)file_finish2(file_recovery, params, 1, list_search_space);
+  (void)file_finish2(file_recovery, params, 1, list_search_space, NULL, 0);
   switch(ind_stop)
   {
     case BF_STOP:
