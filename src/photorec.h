@@ -116,7 +116,7 @@ void file_recovery_aborted(file_recovery_t *file_recovery, struct ph_param *para
   @ ensures  \result == PFSTATUS_BAD || \result == PFSTATUS_OK || \result == PFSTATUS_OK_TRUNCATED;
   @*/
 // ensures  valid_file_recovery(file_recovery);
-pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, struct ph_options *options, alloc_data_t *list_search_space, const unsigned char *file_buffer, uint64_t file_buffer_size);
+pfstatus_t file_finish2(file_recovery_t *file_recovery, struct ph_param *params, const int paranoid, alloc_data_t *list_search_space, const unsigned char *file_buffer, uint64_t file_buffer_size);
 
 /*@
   @ requires \valid_read(file_stats);
@@ -221,16 +221,6 @@ void free_search_space(alloc_data_t *list_search_space);
   @*/
 // ensures  valid_file_recovery(file_recovery);
 void set_filename(file_recovery_t *file_recovery, struct ph_param *params);
-
-/*@
-  @ requires \valid(file_recovery);
-  @ requires valid_file_recovery(file_recovery);
-  @ requires \valid(params);
-  @ requires valid_ph_param(params);
-  @ requires \separated(file_recovery, params, &errno);
-  @ ensures \result == PSTATUS_OK || \result == PSTATUS_EACCES;
-  @*/
-pstatus_t photorec_fopen(file_recovery_t *file_recovery, struct ph_param *params, const uint64_t offset);
 
 /*@
   @ requires \valid(params);

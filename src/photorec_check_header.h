@@ -110,7 +110,7 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
     if(options->verbose > 1)
       log_trace("A known header has been found, recovery of the previous file is finished\n");
 #endif
-    *file_recovered=file_finish2(file_recovery, params, options, list_search_space, NULL, 0);
+    *file_recovered=file_finish2(file_recovery, params, options->paranoid, list_search_space, NULL, 0);
     if(*file_recovered==PFSTATUS_OK_TRUNCATED)
       return PSTATUS_OK;
   }
@@ -135,11 +135,7 @@ static pstatus_t photorec_header_found(const file_recovery_t *file_recovery_new,
   }
 #endif
   set_filename(file_recovery, params);
-  
-  // if(!options->highmem)
-    // return photorec_fopen(file_recovery, params, offset);
-
-  if(!options->highmem && file_recovery->file_stat->file_hint->recover==1)
+  if(file_recovery->file_stat->file_hint->recover==1)
   {
 #if defined(__CYGWIN__) || defined(__MINGW32__)
     file_recovery->handle=fopen_with_retry(file_recovery->filename,"w+b");

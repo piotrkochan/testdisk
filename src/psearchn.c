@@ -370,23 +370,11 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
       {
         if(data_check_status==DC_ERROR)
           file_recovery.file_size=0;
-        
-        // unsigned int fopen_failed = 0;
-        // // fopen late on highmem
-        // if(options->highmem) {
-        //   pstatus_t fopen_result = photorec_fopen(&file_recovery, params, offset);
-        //   if(fopen_result != PSTATUS_OK) {
-        //       data_check_status = fopen_result;
-        //       fopen_failed = 1;
-        //   }
-        // }
-        // if(!fopen_failed) {
-          file_recovered=file_finish2(&file_recovery, params, options, list_search_space, file_buffer, file_buffer_size);
-          /* Clear file buffer for next file */
-          file_buffer_size=0;
-          if(options->lowmem > 0)
-            forget(list_search_space,current_search_space);
-        // }
+        file_recovered=file_finish2(&file_recovery, params, options->paranoid, list_search_space, file_buffer, file_buffer_size);
+        /* Clear file buffer for next file */
+        file_buffer_size=0;
+        if(options->lowmem > 0)
+          forget(list_search_space,current_search_space);
       }
     }
     if(ind_stop!=PSTATUS_OK)
@@ -411,8 +399,7 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
         if(file_recovered_old==PFSTATUS_OK)
         {
           offset_before_back=offset;
-          if(back < 5 &&
-              get_prev_file_header(list_search_space, &current_search_space, &offset)==0)
+          if(back < 5 && get_prev_file_header(list_search_space, &current_search_space, &offset)==0)
           {
             back++;
           }
@@ -436,7 +423,7 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
       offset_before_back=offset;
       if(back < 5 && get_prev_file_header(list_search_space, &current_search_space, &offset)==0)
       {
-	      back++;
+        back++;
       }
       else
       {
@@ -451,24 +438,11 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
 	    current_search_space, current_search_space->list.prev, current_search_space->list.next);
       log_trace("End of media\n");
 #endif
-      // unsigned int fopen_failed = 0;
-      // // fopen late on highmem
-      // if(options->highmem) {
-      //   pstatus_t fopen_result = photorec_fopen(&file_recovery, params, offset);
-      //   if(fopen_result != PSTATUS_OK) {
-      //       file_recovered = PFSTATUS_BAD;
-      //       fopen_failed = 1;
-      //   }
-      // }
-      // if(!fopen_failed) {
-        file_recovered=file_finish2(&file_recovery, params, options, list_search_space, file_buffer, file_buffer_size);
-        /* Clear file buffer */
-        file_buffer_size=0;
-        if(file_recovered!=PFSTATUS_BAD)
-          get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
-        if(options->lowmem > 0)
-          forget(list_search_space,current_search_space);
-      // }
+      file_recovered=file_finish2(&file_recovery, params, options->paranoid, list_search_space, file_buffer, file_buffer_size);
+      if(file_recovered!=PFSTATUS_BAD)
+        get_prev_location_smart(list_search_space, &current_search_space, &offset, file_recovery.location.start);
+      if(options->lowmem > 0)
+        forget(list_search_space,current_search_space);
     }
     buffer_olddata+=blocksize;
     buffer+=blocksize;
@@ -509,22 +483,22 @@ pstatus_t photorec_aux(struct ph_param *params, const struct ph_options *options
           ind_stop=photorec_progressbar(stdscr, params->pass, params, offset, current_time);
 #endif
           json_log_progress(params, params->pass, offset);
-          params->offset=offset;
-          if(need_to_stop!=0 || ind_stop!=PSTATUS_OK)
-          {
+	  params->offset=offset;
+	  if(need_to_stop!=0 || ind_stop!=PSTATUS_OK)
+	  {
 #ifndef DISABLED_FOR_FRAMAC
-            log_info("PhotoRec has been stopped\n");
+	    log_info("PhotoRec has been stopped\n");
 #endif
-            file_recovery_aborted(&file_recovery, params, list_search_space);
+	    file_recovery_aborted(&file_recovery, params, list_search_space);
 #ifndef DISABLED_FOR_FRAMAC
-            if(file_buffer != NULL)
-              free(file_buffer);
-            free(buffer_start);
+      if(file_buffer != NULL)
+        free(file_buffer);
+	    free(buffer_start);
 #endif
-            return PSTATUS_STOP;
-          }
-          if(current_time >= next_checkpoint)
-            next_checkpoint=regular_session_save(list_search_space, params, options, current_time);
+	    return PSTATUS_STOP;
+	  }
+	  if(current_time >= next_checkpoint)
+	    next_checkpoint=regular_session_save(list_search_space, params, options, current_time);
         }
       }
     }
